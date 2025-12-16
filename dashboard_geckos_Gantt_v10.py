@@ -75,23 +75,34 @@ if uploaded_file is not None:
 
     # --- 側邊欄篩選 ---
     st.sidebar.header("篩選條件")
+    
+    # [新增] 專案名稱篩選
+    project_options = df['專案'].unique()
+    project_filter = st.sidebar.multiselect("專案名稱", options=project_options)
+
     cat_filter = st.sidebar.multiselect("專案類別", options=df['專案類別'].unique())
     scene_filter = st.sidebar.multiselect("產業應用場景", options=df['產業應用場景'].unique())
     market_filter = st.sidebar.multiselect("市場", options=df['市場'].unique())
     revenue_grade_filter = st.sidebar.multiselect("營收等級", options=df['營收等級'].unique())
     
-    npdr_options = df['NPDR開案時間'].astype(str).unique()
-    npdr_filter = st.sidebar.multiselect("NPDR開案時間", options=npdr_options)
+    # [移除] NPDR開案時間篩選 (依據您的需求移除)
+    # npdr_options = df['NPDR開案時間'].astype(str).unique()
+    # npdr_filter = st.sidebar.multiselect("NPDR開案時間", options=npdr_options)
+    
     order_start_filter = st.sidebar.multiselect("預計訂單起始點", options=df['預計訂單起始點'].unique())
     customer_filter = st.sidebar.multiselect("目標客戶", options=all_customers)
 
     # --- 執行篩選 ---
     df_filtered = df.copy()
+    
+    # 執行新增的專案篩選
+    if project_filter: df_filtered = df_filtered[df_filtered['專案'].isin(project_filter)]
+
     if cat_filter: df_filtered = df_filtered[df_filtered['專案類別'].isin(cat_filter)]
     if scene_filter: df_filtered = df_filtered[df_filtered['產業應用場景'].isin(scene_filter)]
     if market_filter: df_filtered = df_filtered[df_filtered['市場'].isin(market_filter)]
     if revenue_grade_filter: df_filtered = df_filtered[df_filtered['營收等級'].isin(revenue_grade_filter)]
-    if npdr_filter: df_filtered = df_filtered[df_filtered['NPDR開案時間'].astype(str).isin(npdr_filter)]
+    # if npdr_filter: df_filtered = df_filtered[df_filtered['NPDR開案時間'].astype(str).isin(npdr_filter)] # 已移除
     if order_start_filter: df_filtered = df_filtered[df_filtered['預計訂單起始點'].isin(order_start_filter)]
     if customer_filter:
         mask = df_filtered[customer_cols].apply(lambda x: x.isin(customer_filter).any(), axis=1)
@@ -118,7 +129,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區域 1] 專案研發全週期路徑圖 (Roadmap) - v15 (含天數顯示優化)
+    # [區域 1] 專案研發全週期路徑圖 (Roadmap) - v16 (含天數顯示 + 篩選更新)
     # =========================================================================
     st.subheader("🚀 專案研發全週期路徑圖 (Roadmap)")
     
