@@ -9,6 +9,61 @@ import io
 # 設定網頁標題與佈局 (Wide Mode)
 st.set_page_config(page_title="Geckos Dashboard Pro", layout="wide")
 
+# =========================================================================
+# 🔐 [資安強化 V30] 透過 Secrets 進行身分驗證 (避免程式碼明碼洩漏)
+# =========================================================================
+def check_password():
+    """Returns `True` if the user had a correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        # [核心修正] 從 st.secrets 讀取密碼，而不是寫死在程式碼中
+        if st.session_state["password"] == st.secrets["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # 驗證後刪除輸入框內容
+        else:
+            st.session_state["password_correct"] = False
+
+    # 檢查是否已設定 secrets.toml
+    if "password" not in st.secrets:
+        st.error("⚠️ 系統設定錯誤：未檢測到密碼設定檔 (.streamlit/secrets.toml)。請聯絡管理員。")
+        return False
+
+    # 初始化 session state
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    # 如果已經登入成功，直接回傳 True
+    if st.session_state["password_correct"]:
+        return True
+
+    # 顯示登入介面
+    st.title("🔒 Geckos Dashboard 安全登入")
+    st.markdown("##### 本系統包含敏感專案資料，請輸入授權密碼。")
+    
+    st.text_input(
+        "Password", 
+        type="password", 
+        on_change=password_entered, 
+        key="password",
+        placeholder="請輸入密碼..."
+    )
+
+    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+        # 只有在真正驗證失敗後才顯示
+        if "password" not in st.session_state: 
+             st.error("❌ 密碼錯誤，請重新輸入。")
+
+    return False
+
+# 🛑 如果密碼錯誤，停止執行後續程式碼
+if not check_password():
+    st.stop()  
+
+# =========================================================================
+# ⬇️ 以下為 Dashboard 主程式 (只有登入成功才會執行到這裡)
+# =========================================================================
+
 # 標題
 st.title("Geckos Project Dashboard (Executive View)")
 
@@ -302,7 +357,6 @@ if uploaded_file is not None:
                                 diff_days = (dt - current_date).days
                                 diff_weeks = diff_days / 7.0
                                 
-                                # [核心修正 V28] 恢復精確的 "週數 / 天數" 格式
                                 if diff_days > 0:
                                     time_status = f"(再 {diff_weeks:.1f} 週 / {diff_days} 天)"
                                 else:
@@ -311,7 +365,6 @@ if uploaded_file is not None:
                                 hover_content = f"<b>{p['專案']} - {config['name']}</b><br>日期: {date_display} {time_status}"
                                 hover_texts.append(hover_content)
                                 
-                                # 靜態文字：若勾選，只顯示日期
                                 texts.append(f"{date_display}" if show_schedules else "")
 
                         if x_vals:
