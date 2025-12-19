@@ -10,61 +10,43 @@ import io
 st.set_page_config(page_title="Geckos Dashboard Pro", layout="wide")
 
 # =========================================================================
-# 🔐 [資安強化 V30] 透過 Secrets 進行身分驗證 (避免程式碼明碼洩漏)
+# 🔐 [資安強化] 身分驗證
 # =========================================================================
 def check_password():
     """Returns `True` if the user had a correct password."""
-
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        # [核心修正] 從 st.secrets 讀取密碼，而不是寫死在程式碼中
         if st.session_state["password"] == st.secrets["password"]:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # 驗證後刪除輸入框內容
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
-    # 檢查是否已設定 secrets.toml
     if "password" not in st.secrets:
-        st.error("⚠️ 系統設定錯誤：未檢測到密碼設定檔 (.streamlit/secrets.toml)。請聯絡管理員。")
+        st.error("⚠️ 系統設定錯誤：未檢測到密碼設定檔 (.streamlit/secrets.toml)。")
         return False
 
-    # 初始化 session state
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
-    # 如果已經登入成功，直接回傳 True
     if st.session_state["password_correct"]:
         return True
 
-    # 顯示登入介面
     st.title("🔒 Geckos Dashboard 安全登入")
     st.markdown("##### 本系統包含敏感專案資料，請輸入授權密碼。")
+    st.text_input("Password", type="password", on_change=password_entered, key="password")
     
-    st.text_input(
-        "Password", 
-        type="password", 
-        on_change=password_entered, 
-        key="password",
-        placeholder="請輸入密碼..."
-    )
-
     if "password_correct" in st.session_state and not st.session_state["password_correct"]:
-        # 只有在真正驗證失敗後才顯示
         if "password" not in st.session_state: 
              st.error("❌ 密碼錯誤，請重新輸入。")
-
     return False
 
-# 🛑 如果密碼錯誤，停止執行後續程式碼
 if not check_password():
-    st.stop()  
+    st.stop()
 
 # =========================================================================
-# ⬇️ 以下為 Dashboard 主程式 (只有登入成功才會執行到這裡)
+# ⬇️ Dashboard 主程式
 # =========================================================================
 
-# 標題
 st.title("Geckos Project Dashboard (Executive View)")
 
 # 1. 檔案上傳區塊
@@ -73,7 +55,6 @@ uploaded_file = st.sidebar.file_uploader("請上傳專案總表 (Excel/CSV)", ty
 
 # --- 輔助函式 ---
 def parse_quarter_date_end(date_str):
-    """將 '2026Q2' 轉為季末日期"""
     if pd.isna(date_str): return None
     date_str = str(date_str).strip().upper()
     match = re.search(r'(\d{4}).*Q(\d)', date_str)
@@ -87,150 +68,168 @@ def parse_quarter_date_end(date_str):
     return None
 
 def get_week_str(dt):
-    """將日期轉為 YYYY-Www 格式 (ISO Week)"""
     if pd.isnull(dt): return None
     iso_cal = dt.isocalendar()
     return f"{iso_cal.year}-W{iso_cal.week:02d}"
 
 if uploaded_file is not None:
-    # 2. 讀取資料
+    # 2. 讀取與初始化資料
     try:
-        if uploaded_file.name.endswith('.csv'):
-            df_raw = pd.read_csv(uploaded_file)
-        else:
-            df_raw = pd.read_excel(uploaded_file)
+        file_id = uploaded_file.file_id if hasattr(uploaded_file, 'file_id') else uploaded_file.name
         
-        # 資料前處理 (統一去除空白)
-        df_raw.columns = df_raw.columns.str.strip()
-        
-        # 處理數值欄位
-        revenue_col = None
-        candidates_priority = [c for c in df_raw.columns if '營收' in c and 'TWD' in c]
-        candidates_secondary = [c for c in df_raw.columns if '營收' in c] 
-        if candidates_priority: revenue_col = candidates_priority[0]
-        elif candidates_secondary: revenue_col = candidates_secondary[0]
-        else: revenue_col = '預估營收(TWD)'
-
-        if revenue_col in df_raw.columns:
-            if df_raw[revenue_col].dtype == 'object':
-                df_raw[revenue_col] = pd.to_numeric(df_raw[revenue_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        if 'full_df' not in st.session_state or st.session_state.get('current_file_id') != file_id:
+            if uploaded_file.name.endswith('.csv'):
+                df_raw = pd.read_csv(uploaded_file)
             else:
-                df_raw[revenue_col] = df_raw[revenue_col].fillna(0)
+                df_raw = pd.read_excel(uploaded_file)
+            
+            df_raw.columns = df_raw.columns.str.strip()
+            
+            # 數值前處理
+            for col in df_raw.columns:
+                if '營收' in col: 
+                     if df_raw[col].dtype == 'object':
+                        df_raw[col] = pd.to_numeric(df_raw[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                     else:
+                        df_raw[col] = df_raw[col].fillna(0)
+
+            st.session_state['full_df'] = df_raw
+            st.session_state['current_file_id'] = file_id
 
     except Exception as e:
         st.error(f"檔案讀取失敗: {e}")
         st.stop()
 
+    df_full = st.session_state['full_df']
+
+    # --- 欄位識別 ---
+    col_twd = None
+    col_rmb = None
+    
+    candidates_twd = [c for c in df_full.columns if '營收' in c and 'TWD' in c]
+    if candidates_twd: col_twd = candidates_twd[0]
+    
+    candidates_rmb = [c for c in df_full.columns if '營收' in c and 'RMB' in c]
+    if candidates_rmb: col_rmb = candidates_rmb[0]
+    
+    if not col_twd:
+        candidates_gen = [c for c in df_full.columns if '營收' in c and c != col_rmb]
+        if candidates_gen: col_twd = candidates_gen[0]
+
+    if not col_twd:
+        st.error("❌ 找不到「預估營收(TWD)」相關欄位，請檢查 Excel 表頭。")
+        st.stop()
+
     # =========================================================================
-    # [區塊 1] 篩選條件
+    # [區塊 1] 篩選條件 & 匯率設定
     # =========================================================================
     st.sidebar.header("篩選條件")
     
     # 1. 專案
-    project_options = df_raw['專案'].unique() if '專案' in df_raw.columns else []
+    project_options = df_full['專案'].unique() if '專案' in df_full.columns else []
     project_filter = st.sidebar.multiselect("專案", options=project_options)
 
     # 2. 產品類別
-    if '產品類別' in df_raw.columns:
+    if '產品類別' in df_full.columns:
         cat_col_name = '產品類別'
-    elif '專案類別' in df_raw.columns:
+    elif '專案類別' in df_full.columns:
         cat_col_name = '專案類別'
     else:
         cat_col_name = None
     
     if cat_col_name:
-        cat_filter = st.sidebar.multiselect("產品類別", options=df_raw[cat_col_name].unique())
+        cat_filter = st.sidebar.multiselect("產品類別", options=df_full[cat_col_name].unique())
     else:
         cat_filter = []
 
     # 3. 產品應用場景
     scene_col = '產業應用場景'
-    scene_filter = st.sidebar.multiselect("產品應用場景", options=df_raw[scene_col].unique()) if scene_col in df_raw.columns else []
+    scene_filter = st.sidebar.multiselect("產品應用場景", options=df_full[scene_col].unique()) if scene_col in df_full.columns else []
     
     # 4. 開案類別
     open_type_col = '開案類別'
-    open_type_filter = st.sidebar.multiselect("開案類別", options=df_raw[open_type_col].unique()) if open_type_col in df_raw.columns else []
+    open_type_filter = st.sidebar.multiselect("開案類別", options=df_full[open_type_col].unique()) if open_type_col in df_full.columns else []
 
     # 5. 市場
-    market_filter = st.sidebar.multiselect("市場", options=df_raw['市場'].unique()) if '市場' in df_raw.columns else []
+    market_filter = st.sidebar.multiselect("市場", options=df_full['市場'].unique()) if '市場' in df_full.columns else []
     
     # 6. 預計訂單時間
     order_col = '預計訂單起始點'
-    order_start_filter = st.sidebar.multiselect("預計訂單時間", options=df_raw[order_col].unique()) if order_col in df_raw.columns else []
+    order_start_filter = st.sidebar.multiselect("預計訂單時間", options=df_full[order_col].unique()) if order_col in df_full.columns else []
     
+    # --- 匯率設定 ---
+    st.sidebar.divider()
+    st.sidebar.header("💱 匯率設定")
+    rmb_rate = st.sidebar.number_input("RMB 換 TWD 匯率", value=4.4, step=0.01, format="%.2f")
+
     # --- 執行篩選 ---
-    df_filtered_base = df_raw.copy()
+    df_filtered = df_full.copy()
     
-    if project_filter and '專案' in df_filtered_base.columns: 
-        df_filtered_base = df_filtered_base[df_filtered_base['專案'].isin(project_filter)]
+    if project_filter and '專案' in df_filtered.columns: 
+        df_filtered = df_filtered[df_filtered['專案'].isin(project_filter)]
     if cat_filter and cat_col_name: 
-        df_filtered_base = df_filtered_base[df_filtered_base[cat_col_name].isin(cat_filter)]
-    if scene_filter and scene_col in df_filtered_base.columns:
-        df_filtered_base = df_filtered_base[df_filtered_base[scene_col].isin(scene_filter)]
-    if open_type_filter and open_type_col in df_filtered_base.columns:
-        df_filtered_base = df_filtered_base[df_filtered_base[open_type_col].isin(open_type_filter)]
-    if market_filter and '市場' in df_filtered_base.columns:
-        df_filtered_base = df_filtered_base[df_filtered_base['市場'].isin(market_filter)]
-    if order_start_filter and order_col in df_filtered_base.columns:
-        df_filtered_base = df_filtered_base[df_filtered_base[order_col].isin(order_start_filter)]
+        df_filtered = df_filtered[df_filtered[cat_col_name].isin(cat_filter)]
+    if scene_filter and scene_col in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered[scene_col].isin(scene_filter)]
+    if open_type_filter and open_type_col in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered[open_type_col].isin(open_type_filter)]
+    if market_filter and '市場' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['市場'].isin(market_filter)]
+    if order_start_filter and order_col in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered[order_col].isin(order_start_filter)]
 
-    # --- Session State 管理數據流 ---
-    if 'last_filtered_shape' not in st.session_state:
-        st.session_state['last_filtered_shape'] = None
-    if 'working_df' not in st.session_state:
-        st.session_state['working_df'] = df_filtered_base
-
-    current_shape = df_filtered_base.shape
-    if st.session_state['last_filtered_shape'] != current_shape or \
-       not df_filtered_base.index.equals(st.session_state['working_df'].index):
-        st.session_state['working_df'] = df_filtered_base
-        st.session_state['last_filtered_shape'] = current_shape
-
-    df_chart_source = st.session_state['working_df']
+    # --- 計算顯示用的欄位 ---
+    val_twd = df_filtered[col_twd].fillna(0)
+    val_rmb = df_filtered[col_rmb].fillna(0) if col_rmb else 0
+    df_filtered['Calculated_Total_TWD'] = val_twd + (val_rmb * rmb_rate)
+    
+    total_revenue_twd = df_filtered['Calculated_Total_TWD'].sum()
+    project_count_unique = df_filtered['專案'].nunique()
 
     # =========================================================================
     # [區塊 2] KPI Metrics
     # =========================================================================
     st.divider()
-    total_revenue = df_chart_source[revenue_col].sum()
-    project_count = len(df_chart_source)
     
-    if not df_chart_source.empty and total_revenue > 0:
-        top_project_row = df_chart_source.loc[df_chart_source[revenue_col].idxmax()]
-        top_contributor_text = top_project_row['專案'] if '專案' in top_project_row else "Unknown"
-        top_project_rev = top_project_row[revenue_col]
+    if not df_filtered.empty and total_revenue_twd > 0:
+        df_grouped = df_filtered.groupby('專案')['Calculated_Total_TWD'].sum()
+        top_project_name = df_grouped.idxmax()
+        top_project_rev = df_grouped.max()
+        top_contributor_text = top_project_name
     else:
         top_contributor_text = "無資料"
         top_project_rev = 0
 
     kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric(label="💰 預估總營收 (TWD)", value=f"{total_revenue:,.0f}")
-    kpi2.metric(label="👑 營收貢獻王", value=top_contributor_text, delta=f"{top_project_rev:,.0f}")
-    kpi3.metric(label="📊 篩選後專案數", value=project_count)
+    kpi1.metric(label=f"💰 預估總營收 (TWD) - 匯率 {rmb_rate}", value=f"{total_revenue_twd:,.0f}")
+    kpi2.metric(label="👑 營收貢獻王 (含RMB換算)", value=top_contributor_text, delta=f"{top_project_rev:,.0f}")
+    kpi3.metric(label="📊 篩選後專案數 (Unique)", value=project_count_unique)
 
     st.divider()
 
     # =========================================================================
-    # [區塊 3] 專案研發全週期路徑圖 (Roadmap) - V28 (恢復精確週數/天數)
+    # [區塊 3] 專案研發全週期路徑圖 (Roadmap)
     # =========================================================================
     st.subheader("🚀 專案研發全週期路徑圖 (Roadmap)")
     
     show_schedules = st.checkbox("👁️ 顯示所有節點時程 (Show All Node Schedules)", value=False)
     
-    if not df_chart_source.empty:
+    if not df_filtered.empty:
         try:
             plot_data = []
+            
+            df_roadmap_unique = df_filtered.drop_duplicates(subset=['專案'])
             
             start_col = None
             possible_start_cols = ['開案時間', '开案时间', 'NPDR開案時間', 'NPDR开案时间', 'NPDR']
             for col in possible_start_cols:
-                if col in df_chart_source.columns:
+                if col in df_roadmap_unique.columns:
                     start_col = col
                     break
             if not start_col: start_col = '開案時間'
 
             col_map = {'NPDR': start_col, 'DV': '設計驗證時間', 'EV': '工程驗證時間', 'Order': '預計訂單起始點'}
-            available_cols = {k: v for k, v in col_map.items() if v in df_chart_source.columns}
+            available_cols = {k: v for k, v in col_map.items() if v in df_roadmap_unique.columns}
             
             all_active_weeks = set() 
             current_date = pd.Timestamp.now().normalize()
@@ -238,7 +237,7 @@ if uploaded_file is not None:
             all_active_weeks.add(current_week_str) 
 
             if available_cols:
-                for idx, row in df_chart_source.iterrows():
+                for idx, row in df_roadmap_unique.iterrows():
                     dates = {}
                     for key in ['NPDR', 'DV', 'EV']:
                         if key in available_cols:
@@ -287,10 +286,8 @@ if uploaded_file is not None:
                         if start_node == 'DV' and end_node == 'EV':   return '#E74C3C'
                         return '#7F8C8D'
 
-                    # 1. 畫分段連線
                     for p in plot_data:
                         if not p['has_data']: continue
-
                         points = p['sorted_points']
                         if len(points) < 2: continue
                             
@@ -299,7 +296,6 @@ if uploaded_file is not None:
                             end_node, end_date = points[i+1]
                             start_week = get_week_str(start_date)
                             end_week = get_week_str(end_date)
-                            
                             days_remaining = (end_date - current_date).days
                             weeks_remaining = days_remaining / 7.0
                             days_elapsed = (current_date - start_date).days
@@ -321,11 +317,9 @@ if uploaded_file is not None:
                                 start_idx = sorted_weeks.index(start_week)
                                 end_idx = sorted_weeks.index(end_week)
                                 if end_idx > start_idx + 1:
-                                    intermediates = sorted_weeks[start_idx+1 : end_idx]
-                                    x_trace.extend(intermediates)
+                                    x_trace.extend(sorted_weeks[start_idx+1 : end_idx])
                             except: pass
                             x_trace.append(end_week)
-                            
                             y_trace = [p['專案']] * len(x_trace)
                             text_trace = [hover_txt] * len(x_trace)
                             line_color = get_line_color(start_node, end_node)
@@ -337,18 +331,17 @@ if uploaded_file is not None:
                                 text=text_trace, hovertemplate="%{text}<extra></extra>", showlegend=False
                             ))
                     
-                    # 2. 畫節點
                     markers_config = {
                         'NPDR':  {'color': '#2E86C1', 'symbol': 'circle', 'name': 'NPDR 開案'},
                         'DV':    {'color': '#F39C12', 'symbol': 'diamond', 'name': '設計驗證 (DV)'},
                         'EV':    {'color': '#E74C3C', 'symbol': 'square', 'name': '工程驗證 (EV)'},
                         'Order': {'color': '#27AE60', 'symbol': 'star', 'name': '預計訂單 (Order)', 'size': 14}
                     }
+
                     for key, config in markers_config.items():
                         x_vals, y_vals, texts, hover_texts = [], [], [], []
                         for p in plot_data:
                             if not p['has_data']: continue
-                            
                             if key in p['dates']:
                                 dt = p['dates'][key]
                                 x_vals.append(get_week_str(dt))
@@ -364,7 +357,6 @@ if uploaded_file is not None:
                                 
                                 hover_content = f"<b>{p['專案']} - {config['name']}</b><br>日期: {date_display} {time_status}"
                                 hover_texts.append(hover_content)
-                                
                                 texts.append(f"{date_display}" if show_schedules else "")
 
                         if x_vals:
@@ -372,48 +364,24 @@ if uploaded_file is not None:
                             fig.add_trace(go.Scatter(
                                 x=x_vals, y=y_vals, mode=mode_setting,
                                 marker=dict(color=config['color'], symbol=config['symbol'], size=config.get('size', 10), line=dict(width=2, color='white')),
-                                name=config['name'], 
-                                text=texts,
-                                hovertext=hover_texts,
-                                hoverinfo="text",
-                                textposition="bottom center"
+                                name=config['name'], text=texts, hovertext=hover_texts, hoverinfo="text", textposition="bottom center"
                             ))
                     
-                    # 3. 無資料標記
                     no_data_x, no_data_y, no_data_hover = [], [], []
                     for p in plot_data:
                         if not p['has_data']:
                             no_data_x.append(current_week_str) 
                             no_data_y.append(p['專案'])
                             no_data_hover.append(f"<b>{p['專案']}</b><br>❌ 無有效時間資料")
-                    
                     if no_data_x:
-                        fig.add_trace(go.Scatter(
-                            x=no_data_x, y=no_data_y, mode='markers',
-                            marker=dict(color='gray', symbol='circle-x', size=12, line=dict(width=1, color='white')),
-                            name='無時間資料',
-                            hovertext=no_data_hover, hoverinfo="text"
-                        ))
+                        fig.add_trace(go.Scatter(x=no_data_x, y=no_data_y, mode='markers', marker=dict(color='gray', symbol='circle-x', size=12), name='無時間資料', hovertext=no_data_hover, hoverinfo="text"))
 
-                    # Legend
-                    legend_items = [
-                        ("🟦 NPDR開案", '#2E86C1'),
-                        ("🟧 標準設計 (往DV)", '#F39C12'),
-                        ("🟥 標準工程 (往EV)", '#E74C3C'),
-                        ("🟩 標準導入 (往Order)", '#2ECC71'),
-                        ("⬜ 其他路徑", '#7F8C8D'),
-                        ("❌ 無資料", 'gray')
-                    ]
+                    legend_items = [("🟦 NPDR開案", '#2E86C1'), ("🟧 標準設計 (往DV)", '#F39C12'), ("🟥 標準工程 (往EV)", '#E74C3C'), ("🟩 標準導入 (往Order)", '#2ECC71'), ("⬜ 其他路徑", '#7F8C8D'), ("❌ 無資料", 'gray')]
                     for name, color in legend_items:
                          fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color=color, width=6), name=name))
                     
                     fig.add_vline(x=current_week_str, line_width=2, line_dash="dash", line_color="#E74C3C", opacity=0.8)
-                    fig.add_annotation(
-                        x=current_week_str, y=1.02, yref='paper',
-                        text=f"📍 本週 ({current_week_str})", showarrow=False,
-                        font=dict(color="#E74C3C", size=12, weight="bold"),
-                        bgcolor="rgba(255, 255, 255, 0.8)", bordercolor="#E74C3C"
-                    )
+                    fig.add_annotation(x=current_week_str, y=1.02, yref='paper', text=f"📍 本週 ({current_week_str})", showarrow=False, font=dict(color="#E74C3C", size=12, weight="bold"), bgcolor="rgba(255, 255, 255, 0.8)", bordercolor="#E74C3C")
 
                     try:
                         current_week_idx = sorted_weeks.index(current_week_str)
@@ -424,21 +392,7 @@ if uploaded_file is not None:
                         end_idx_view = len(sorted_weeks) - 1
 
                     chart_height = max(400, 150 + (len(plot_data) * 45))
-                    
-                    fig.update_layout(
-                        xaxis=dict(
-                            title="時間軸 (週次)", type='category', 
-                            categoryorder='array', categoryarray=sorted_weeks,
-                            tickangle=-45,
-                            range=[start_idx_view - 0.5, end_idx_view + 0.5] 
-                        ),
-                        yaxis=dict(title="專案", autorange="reversed"),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5),
-                        margin=dict(l=0, r=0, t=80, b=20),
-                        height=chart_height, 
-                        hoverlabel=dict(bgcolor="white", font_size=14, font_family="Arial")
-                    )
-
+                    fig.update_layout(xaxis=dict(title="時間軸 (週次)", type='category', categoryorder='array', categoryarray=sorted_weeks, tickangle=-45, range=[start_idx_view - 0.5, end_idx_view + 0.5]), yaxis=dict(title="專案", autorange="reversed"), legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5), margin=dict(l=0, r=0, t=80, b=20), height=chart_height, hoverlabel=dict(bgcolor="white", font_size=14, font_family="Arial"))
                     st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("篩選後無有效時間資料，無法繪製路徑圖。")
@@ -452,16 +406,74 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
+    # [區塊 7] 詳細資料檢視 (可編輯模式)
+    # =========================================================================
+    st.subheader("📋 詳細資料檢視 (可編輯模式)")
+    st.info(f"💡 提示：您可在此修改數值或勾選「刪除」來移除資料。所有變更需點擊「🔄 更新數據」或「🗑️ 刪除勾選資料」才會生效。")
+
+    column_cfg = {
+        "專案": st.column_config.TextColumn("專案", width="medium", disabled=False, required=True, pinned=True),
+        "🗑️ 刪除": st.column_config.CheckboxColumn("刪除", width="small", default=False)
+    }
+
+    display_df = df_filtered.drop(columns=['Calculated_Total_TWD'], errors='ignore').copy()
+    display_df.insert(0, "🗑️ 刪除", False)
+
+    edited_df = st.data_editor(
+        display_df, 
+        column_config=column_cfg,
+        num_rows="dynamic", 
+        use_container_width=True
+    )
+
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+    
+    with col_btn1:
+        if st.button("🔄 更新數據 (Update)", type="primary"):
+            data_to_update = edited_df.drop(columns=["🗑️ 刪除"])
+            st.session_state['full_df'].update(data_to_update)
+            new_rows = data_to_update.loc[~data_to_update.index.isin(st.session_state['full_df'].index)]
+            if not new_rows.empty:
+                st.session_state['full_df'] = pd.concat([st.session_state['full_df'], new_rows])
+            
+            st.toast("✅ 數據已更新！", icon="🎉")
+            st.rerun()
+
+    with col_btn2:
+        if st.button("🗑️ 刪除勾選資料 (Delete Selected)", type="secondary"):
+            rows_to_delete = edited_df[edited_df["🗑️ 刪除"] == True].index
+            if len(rows_to_delete) > 0:
+                st.session_state['full_df'] = st.session_state['full_df'].drop(rows_to_delete)
+                st.toast(f"✅ 已刪除 {len(rows_to_delete)} 筆資料！", icon="🗑️")
+                st.rerun()
+            else:
+                st.warning("⚠️ 請先勾選要刪除的資料列")
+
+    with col_btn3:
+        csv_buffer = io.StringIO()
+        st.session_state['full_df'].to_csv(csv_buffer, index=False)
+        csv_data = csv_buffer.getvalue().encode('utf-8-sig')
+        
+        st.download_button(
+            label="💾 完整存檔 (Download Full CSV)",
+            data=csv_data,
+            file_name="project_data_full.csv",
+            mime="text/csv"
+        )
+
+    st.divider()
+
+    # =========================================================================
     # [區塊 4] & [區塊 5] (折疊收納)
     # =========================================================================
-    if not df_chart_source.empty:
+    if not df_filtered.empty:
         with st.expander("📊 圖表分析 (產品類別 & 市場應用) - 點擊展開", expanded=False):
             row2_col1, row2_col2 = st.columns(2)
 
             with row2_col1:
                 st.subheader("📌 各產品類別營收分佈")
-                if total_revenue > 0 and cat_col_name:
-                    fig_pie = px.pie(df_chart_source, values=revenue_col, names=cat_col_name, hole=0.4, title=f'各{cat_col_name}營收分佈')
+                if total_revenue_twd > 0 and cat_col_name:
+                    fig_pie = px.pie(df_filtered, values='Calculated_Total_TWD', names=cat_col_name, hole=0.4, title=f'各{cat_col_name}營收分佈 (含RMB)')
                     fig_pie.update_traces(textposition='inside', textinfo='percent+label')
                     fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
                     st.plotly_chart(fig_pie, use_container_width=True)
@@ -472,12 +484,13 @@ if uploaded_file is not None:
 
             with row2_col2:
                 st.subheader("🌍 市場 x 應用場景")
-                if total_revenue > 0 and '市場' in df_chart_source.columns and '產業應用場景' in df_chart_source.columns:
-                    df_market = df_chart_source.groupby(['市場', '產業應用場景'])[revenue_col].sum().reset_index()
-                    fig_market = px.bar(df_market, x='市場', y=revenue_col, color='產業應用場景', 
-                                        barmode='stack', text_auto='.2s', title='各地區市場應用')
+                if total_revenue_twd > 0 and '市場' in df_filtered.columns and '產業應用場景' in df_filtered.columns:
+                    df_market = df_filtered.groupby(['市場', '產業應用場景'])['Calculated_Total_TWD'].sum().reset_index()
+                    # [V35] 修改顯示格式為千分位
+                    fig_market = px.bar(df_market, x='市場', y='Calculated_Total_TWD', color='產業應用場景', 
+                                        barmode='stack', text_auto=',.0f', title='各地區市場應用 (含RMB)')
                     st.plotly_chart(fig_market, use_container_width=True)
-                elif '市場' not in df_chart_source.columns or '產業應用場景' not in df_chart_source.columns:
+                elif '市場' not in df_filtered.columns or '產業應用場景' not in df_filtered.columns:
                     st.info("缺少 '市場' 或 '產業應用場景' 欄位，無法繪製市場圖")
                 else:
                     st.info("無營收數據")
@@ -487,48 +500,14 @@ if uploaded_file is not None:
     # =========================================================================
     st.divider()
     with st.expander("🏆 營收 Top 10 專案 - 點擊展開", expanded=False):
-        if total_revenue > 0:
-            df_chart = df_chart_source.nlargest(10, revenue_col).sort_values(revenue_col, ascending=True)
-            fig_bar = px.bar(df_chart, x=revenue_col, y='專案', orientation='h', text_auto='.2s', 
-                             color=revenue_col, color_continuous_scale='Blues')
-            fig_bar.update_layout(xaxis_title="預估營收", yaxis_title="專案")
+        if total_revenue_twd > 0:
+            df_chart = df_filtered.groupby('專案')['Calculated_Total_TWD'].sum().reset_index()
+            df_chart = df_chart.nlargest(10, 'Calculated_Total_TWD').sort_values('Calculated_Total_TWD', ascending=True)
+            
+            # [V35] 修改顯示格式為千分位
+            fig_bar = px.bar(df_chart, x='Calculated_Total_TWD', y='專案', orientation='h', text_auto=',.0f', 
+                             color='Calculated_Total_TWD', color_continuous_scale='Blues')
+            fig_bar.update_layout(xaxis_title="預估營收 (含RMB換算)", yaxis_title="專案")
             st.plotly_chart(fig_bar, use_container_width=True)
         else:
             st.info("無營收數據")
-
-    # =========================================================================
-    # [區塊 7] 詳細資料檢視 (可編輯模式)
-    # =========================================================================
-    st.divider()
-    st.subheader("📋 詳細資料檢視 (可編輯模式)")
-    st.info("💡 提示：您可以直接點擊下方表格修改數值或日期，修改完畢後請點擊「🔄 更新數據」按鈕。")
-
-    column_cfg = {
-        "專案": st.column_config.TextColumn("專案", width="medium", disabled=False, required=True, pinned=True)
-    }
-
-    edited_df = st.data_editor(
-        st.session_state['working_df'], 
-        column_config=column_cfg,
-        num_rows="dynamic", 
-        use_container_width=True
-    )
-
-    col_btn1, col_btn2 = st.columns([1, 1])
-    
-    with col_btn1:
-        if st.button("🔄 更新數據 (Update Charts)", type="primary"):
-            st.session_state['working_df'] = edited_df
-            st.rerun()
-            
-    with col_btn2:
-        csv_buffer = io.StringIO()
-        edited_df.to_csv(csv_buffer, index=False)
-        csv_data = csv_buffer.getvalue().encode('utf-8-sig')
-        
-        st.download_button(
-            label="💾 存檔 (下載 CSV)",
-            data=csv_data,
-            file_name="edited_project_data.csv",
-            mime="text/csv"
-        )
