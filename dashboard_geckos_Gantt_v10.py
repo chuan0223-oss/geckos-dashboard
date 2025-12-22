@@ -47,7 +47,7 @@ if not check_password():
 # ⬇️ Dashboard 主程式
 # =========================================================================
 
-st.title("Geckos Project Dashboard (Executive View)")
+st.title("Geckos Project Dashboard")
 
 # 1. 檔案上傳區塊
 st.sidebar.header("資料上傳區")
@@ -511,3 +511,4 @@ if uploaded_file is not None:
             st.plotly_chart(fig_bar, use_container_width=True)
         else:
             st.info("無營收數據")
+
