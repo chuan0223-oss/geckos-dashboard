@@ -192,10 +192,9 @@ if uploaded_file is not None:
 
     df_chart_source = st.session_state['working_df']
 
-    # --- 計算顯示用的欄位 (僅供顯示，不寫回存檔) ---
+    # --- 計算顯示用的欄位 ---
     val_twd = df_chart_source[col_twd].fillna(0)
     val_rmb = df_chart_source[col_rmb].fillna(0) if col_rmb else 0
-    # [關鍵] 這裡計算了 Calculated_Total_TWD，所以後面的圖表必須用 df_chart_source
     df_chart_source['Calculated_Total_TWD'] = val_twd + (val_rmb * rmb_rate)
     
     total_revenue_twd = df_chart_source['Calculated_Total_TWD'].sum()
@@ -223,7 +222,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 8] 本週/本月重點提醒 (Milestone Alerts)
+    # [區塊 8] 本週/本月重點提醒 (Milestone Alerts) - V45 (紅色急迫感優化)
     # =========================================================================
     if not df_chart_source.empty:
         now = pd.Timestamp.now().normalize()
@@ -242,31 +241,33 @@ if uploaded_file is not None:
                 break
         if not start_col: start_col = '開案時間'
 
-        icon_map = {
-            'NPDR': '🔵', 
-            'DV': '🔶', 
-            'EV': '🟥', 
-            'Order': '🟢'
+        icon_map = {'NPDR': '🔵', 'DV': '🔶', 'EV': '🟥', 'Order': '🟢'}
+        col_map_alerts = {'NPDR': start_col, 'DV': '設計驗證時間', 'EV': '工程驗證時間', 'Order': '預計訂單起始點'}
+        stage_name_display = {'NPDR': 'NPDR開案', 'DV': '設計驗證(DV)', 'EV': '工程驗證(EV)', 'Order': '預計訂單(Order)'}
+        
+        # 定義本月重點的卡片樣式 (本週將強制使用紅色系)
+        type_style_map = {
+            'NPDR': {'bg': '#EBF5FB', 'border': '#2E86C1'},
+            'MDR':  {'bg': '#E8F8F5', 'border': '#17A589'},
+            'TDR':  {'bg': '#FEF9E7', 'border': '#F1C40F'},
+            'default': {'bg': '#F2F3F4', 'border': '#95A5A6'}
         }
 
-        col_map_alerts = {
-            'NPDR': start_col, 
-            'DV': '設計驗證時間', 
-            'EV': '工程驗證時間', 
-            'Order': '預計訂單起始點'
-        }
-        
-        stage_name_display = {
-            'NPDR': 'NPDR開案',
-            'DV': '設計驗證(DV)',
-            'EV': '工程驗證(EV)',
-            'Order': '預計訂單(Order)'
-        }
-        
+        # 定義本週重點的強制樣式 (Urgent Red)
+        urgent_style = {'bg': '#FDEDEC', 'border': '#E74C3C', 'text': '#C0392B'}
+
         week_items = []
         month_items = []
 
         for idx, row in df_alerts.iterrows():
+            p_type = row.get('開案類別', 'default')
+            if pd.isna(p_type) or p_type not in type_style_map:
+                month_style = type_style_map['default']
+                p_type_display = p_type if pd.notnull(p_type) else "Unknown"
+            else:
+                month_style = type_style_map[p_type]
+                p_type_display = p_type
+
             for key, col_name in col_map_alerts.items():
                 if col_name in df_alerts.columns:
                     raw_val = row[col_name]
@@ -280,21 +281,68 @@ if uploaded_file is not None:
                         
                         days_diff = (dt - now).days
                         
-                        if days_diff < 0:
-                            count_down_str = "(已完成)"
-                            msg = f"<span style='color: #999999;'>{icon} {row['專案']} - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}</span>"
-                        else:
-                            if days_diff == 0:
-                                count_down_str = "(今天)"
-                            else:
-                                count_down_str = f"(剩餘 {days_diff} 天)"
-                            msg = f"{icon} **{row['專案']}** - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}"
-                        
+                        # --- 本週重點邏輯 (強制紅色) ---
                         if start_week <= dt <= end_week:
-                            week_items.append({'dt': dt, 'msg': msg})
+                            if days_diff < 0:
+                                count_down_str = "(已完成)"
+                                # 已完成的本週事項，雖然過期但仍在本週，可以用灰色或淡紅顯示，這裡保持紅色系但文字變灰
+                                content_style = "color: #999999;" 
+                            else:
+                                if days_diff == 0:
+                                    count_down_str = "(今天)"
+                                else:
+                                    count_down_str = f"(剩餘 {days_diff} 天)"
+                                content_style = f"color: {urgent_style['text']};"
+
+                            card_html = f"""
+                            <div style="
+                                background-color: {urgent_style['bg']};
+                                border-left: 5px solid {urgent_style['border']};
+                                padding: 10px;
+                                margin-bottom: 8px;
+                                border-radius: 4px;
+                                box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
+                            ">
+                                <div style="font-size: 0.85em; font-weight: bold; color: {urgent_style['text']}; margin-bottom: 4px;">
+                                    {p_type_display} (Urgent)
+                                </div>
+                                <div style="{content_style}">
+                                    {icon} <b>{row['專案']}</b> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}
+                                </div>
+                            </div>
+                            """
+                            week_items.append({'dt': dt, 'html': card_html})
                         
+                        # --- 本月重點邏輯 (保留類別顏色) ---
                         if dt.year == current_year and dt.month == current_month:
-                            month_items.append({'dt': dt, 'msg': msg})
+                            if days_diff < 0:
+                                count_down_str = "(已完成)"
+                                content_style = "color: #999999;" 
+                            else:
+                                if days_diff == 0:
+                                    count_down_str = "(今天)"
+                                else:
+                                    count_down_str = f"(剩餘 {days_diff} 天)"
+                                content_style = "color: #333333;"
+
+                            card_html = f"""
+                            <div style="
+                                background-color: {month_style['bg']};
+                                border-left: 5px solid {month_style['border']};
+                                padding: 10px;
+                                margin-bottom: 8px;
+                                border-radius: 4px;
+                                box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
+                            ">
+                                <div style="font-size: 0.85em; font-weight: bold; color: {month_style['border']}; margin-bottom: 4px;">
+                                    {p_type_display}
+                                </div>
+                                <div style="{content_style}">
+                                    {icon} <b>{row['專案']}</b> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}
+                                </div>
+                            </div>
+                            """
+                            month_items.append({'dt': dt, 'html': card_html})
 
         week_items.sort(key=lambda x: x['dt'])
         month_items.sort(key=lambda x: x['dt'])
@@ -302,25 +350,33 @@ if uploaded_file is not None:
         if week_items or month_items:
             with st.expander("🔔 本週/本月重點提醒 (Milestone Alerts)", expanded=True):
                 c1, c2 = st.columns(2)
+                
                 with c1:
-                    if week_items:
-                        st.error("📅 **本週重點 (This Week)**")
-                        for item in week_items: 
-                            st.markdown(item['msg'], unsafe_allow_html=True)
-                    else:
-                        st.info("📅 本週無重點事項")
+                    with st.container(border=True):
+                        # [V45] 使用紅色標題
+                        st.markdown(f"<h3 style='color:#E74C3C;'>🔥 本週重點 (Urgent)</h3>", unsafe_allow_html=True)
+                        if week_items:
+                            for item in week_items: 
+                                st.markdown(item['html'], unsafe_allow_html=True)
+                        else:
+                            st.success("✅ 本週無重點事項")
+                
                 with c2:
-                    if month_items:
-                        st.info("🗓️ **本月重點 (This Month)**")
-                        for item in month_items: 
-                            st.markdown(item['msg'], unsafe_allow_html=True)
-                    else:
-                        st.write("🗓️ 本月無重點事項")
+                    with st.container(border=True):
+                        # [V45] 使用藍色標題
+                        st.markdown(f"<h3 style='color:#2E86C1;'>🗓️ 本月重點 (Upcoming)</h3>", unsafe_allow_html=True)
+                        if month_items:
+                            for item in month_items: 
+                                st.markdown(item['html'], unsafe_allow_html=True)
+                        else:
+                            st.info("ℹ️ 本月無重點事項")
 
     # =========================================================================
     # [區塊 3] 專案研發全週期路徑圖 (Roadmap)
     # =========================================================================
-    st.subheader("🚀 專案研發全週期路徑圖 (Roadmap)")
+    current_types = open_type_filter if open_type_filter else ["全部"]
+    type_label = ", ".join(current_types)
+    st.subheader(f"🚀 專案研發全週期路徑圖 (Roadmap) - 類別: [{type_label}]")
     
     show_schedules = st.checkbox("👁️ 顯示所有節點時程 (Show All Node Schedules)", value=False)
     
@@ -390,10 +446,10 @@ if uploaded_file is not None:
                     
                     def get_line_color(start_node, end_node):
                         if end_node == 'DV': return '#F39C12'
-                        if end_node == 'EV': return '#E74C3C'
+                        if end_node == 'EV': return '#9B59B6'
                         if end_node == 'Order': return '#2ECC71'
                         if start_node == 'NPDR' and end_node == 'DV': return '#F39C12'
-                        if start_node == 'DV' and end_node == 'EV':   return '#E74C3C'
+                        if start_node == 'DV' and end_node == 'EV':   return '#9B59B6'
                         return '#7F8C8D'
 
                     for p in plot_data:
@@ -444,7 +500,7 @@ if uploaded_file is not None:
                     markers_config = {
                         'NPDR':  {'color': '#2E86C1', 'symbol': 'circle', 'name': 'NPDR 開案'},
                         'DV':    {'color': '#F39C12', 'symbol': 'diamond', 'name': '設計驗證 (DV)'},
-                        'EV':    {'color': '#E74C3C', 'symbol': 'square', 'name': '工程驗證 (EV)'},
+                        'EV':    {'color': '#9B59B6', 'symbol': 'square', 'name': '工程驗證 (EV)'},
                         'Order': {'color': '#27AE60', 'symbol': 'star', 'name': '預計訂單 (Order)', 'size': 14}
                     }
 
@@ -486,7 +542,7 @@ if uploaded_file is not None:
                     if no_data_x:
                         fig.add_trace(go.Scatter(x=no_data_x, y=no_data_y, mode='markers', marker=dict(color='gray', symbol='circle-x', size=12), name='無時間資料', hovertext=no_data_hover, hoverinfo="text"))
 
-                    legend_items = [("🟦 NPDR開案", '#2E86C1'), ("🟧 標準設計 (往DV)", '#F39C12'), ("🟥 標準工程 (往EV)", '#E74C3C'), ("🟩 標準導入 (往Order)", '#2ECC71'), ("⬜ 其他路徑", '#7F8C8D'), ("❌ 無資料", 'gray')]
+                    legend_items = [("🟦 NPDR開案", '#2E86C1'), ("🟧 標準設計 (往DV)", '#F39C12'), ("🟪 標準工程 (往EV)", '#9B59B6'), ("🟩 標準導入 (往Order)", '#2ECC71'), ("⬜ 其他路徑", '#7F8C8D'), ("❌ 無資料", 'gray')]
                     for name, color in legend_items:
                          fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color=color, width=6), name=name))
                     
@@ -546,7 +602,6 @@ if uploaded_file is not None:
             if not new_rows.empty:
                 st.session_state['full_df'] = pd.concat([st.session_state['full_df'], new_rows])
             
-            # 強制移除 working_df，觸發下次 rerun 從 full_df 重新載入
             if 'working_df' in st.session_state:
                 del st.session_state['working_df']
 
@@ -559,7 +614,6 @@ if uploaded_file is not None:
             if len(rows_to_delete) > 0:
                 st.session_state['full_df'] = st.session_state['full_df'].drop(rows_to_delete)
                 
-                # 同樣需要重置 working_df
                 if 'working_df' in st.session_state:
                     del st.session_state['working_df']
 
@@ -583,7 +637,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 4] & [區塊 5] (折疊收納)
+    # [區塊 4] & [區塊 5]
     # =========================================================================
     if not df_chart_source.empty:
         with st.expander("📊 圖表分析 (產品類別 & 市場應用) - 點擊展開", expanded=False):
@@ -605,7 +659,6 @@ if uploaded_file is not None:
                 st.subheader("🌍 市場 x 應用場景")
                 if total_revenue_twd > 0 and '市場' in df_chart_source.columns and '產業應用場景' in df_chart_source.columns:
                     df_market = df_chart_source.groupby(['市場', '產業應用場景'])['Calculated_Total_TWD'].sum().reset_index()
-                    # [V35] 修改顯示格式為千分位
                     fig_market = px.bar(df_market, x='市場', y='Calculated_Total_TWD', color='產業應用場景', 
                                         barmode='stack', text_auto=',.0f', title='各地區市場應用 (含RMB)')
                     st.plotly_chart(fig_market, use_container_width=True)
@@ -615,7 +668,7 @@ if uploaded_file is not None:
                     st.info("無營收數據")
 
     # =========================================================================
-    # [區塊 6] 營收 Top 10 專案 (折疊收納)
+    # [區塊 6] 營收 Top 10 專案
     # =========================================================================
     st.divider()
     with st.expander("🏆 營收 Top 10 專案 - 點擊展開", expanded=False):
@@ -623,7 +676,6 @@ if uploaded_file is not None:
             df_chart = df_chart_source.groupby('專案')['Calculated_Total_TWD'].sum().reset_index()
             df_chart = df_chart.nlargest(10, 'Calculated_Total_TWD').sort_values('Calculated_Total_TWD', ascending=True)
             
-            # [V35] 修改顯示格式為千分位
             fig_bar = px.bar(df_chart, x='Calculated_Total_TWD', y='專案', orientation='h', text_auto=',.0f', 
                              color='Calculated_Total_TWD', color_continuous_scale='Blues')
             fig_bar.update_layout(xaxis_title="預估營收 (含RMB換算)", yaxis_title="專案")
