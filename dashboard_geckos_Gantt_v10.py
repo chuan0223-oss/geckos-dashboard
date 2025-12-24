@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import re
 import datetime
 import io
+import numpy as np
 
 # 設定網頁標題與佈局 (Wide Mode)
 st.set_page_config(page_title="Geckos Dashboard Pro", layout="wide")
@@ -85,7 +86,11 @@ if uploaded_file is not None:
             
             df_raw.columns = df_raw.columns.str.strip()
             
-            # 數值前處理
+            # [V47] 欄位格式優化
+            if '專案負責人' in df_raw.columns:
+                df_raw['專案負責人'] = df_raw['專案負責人'].astype(str).replace('nan', '')
+
+            # 數值前處理 (只針對必須運算的營收欄位補0，其他保留NaN)
             for col in df_raw.columns:
                 if '營收' in col: 
                      if df_raw[col].dtype == 'object':
@@ -222,7 +227,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 8] 本週/本月重點提醒 (Milestone Alerts) - V45 (紅色急迫感優化)
+    # [區塊 8] 本週/本月重點提醒 (Milestone Alerts)
     # =========================================================================
     if not df_chart_source.empty:
         now = pd.Timestamp.now().normalize()
@@ -245,15 +250,12 @@ if uploaded_file is not None:
         col_map_alerts = {'NPDR': start_col, 'DV': '設計驗證時間', 'EV': '工程驗證時間', 'Order': '預計訂單起始點'}
         stage_name_display = {'NPDR': 'NPDR開案', 'DV': '設計驗證(DV)', 'EV': '工程驗證(EV)', 'Order': '預計訂單(Order)'}
         
-        # 定義本月重點的卡片樣式 (本週將強制使用紅色系)
         type_style_map = {
             'NPDR': {'bg': '#EBF5FB', 'border': '#2E86C1'},
             'MDR':  {'bg': '#E8F8F5', 'border': '#17A589'},
             'TDR':  {'bg': '#FEF9E7', 'border': '#F1C40F'},
             'default': {'bg': '#F2F3F4', 'border': '#95A5A6'}
         }
-
-        # 定義本週重點的強制樣式 (Urgent Red)
         urgent_style = {'bg': '#FDEDEC', 'border': '#E74C3C', 'text': '#C0392B'}
 
         week_items = []
@@ -278,14 +280,11 @@ if uploaded_file is not None:
                     if pd.notnull(dt):
                         icon = icon_map.get(key, '⚪')
                         display_name = stage_name_display.get(key, key)
-                        
                         days_diff = (dt - now).days
                         
-                        # --- 本週重點邏輯 (強制紅色) ---
                         if start_week <= dt <= end_week:
                             if days_diff < 0:
                                 count_down_str = "(已完成)"
-                                # 已完成的本週事項，雖然過期但仍在本週，可以用灰色或淡紅顯示，這裡保持紅色系但文字變灰
                                 content_style = "color: #999999;" 
                             else:
                                 if days_diff == 0:
@@ -313,7 +312,6 @@ if uploaded_file is not None:
                             """
                             week_items.append({'dt': dt, 'html': card_html})
                         
-                        # --- 本月重點邏輯 (保留類別顏色) ---
                         if dt.year == current_year and dt.month == current_month:
                             if days_diff < 0:
                                 count_down_str = "(已完成)"
@@ -350,20 +348,16 @@ if uploaded_file is not None:
         if week_items or month_items:
             with st.expander("🔔 本週/本月重點提醒 (Milestone Alerts)", expanded=True):
                 c1, c2 = st.columns(2)
-                
                 with c1:
                     with st.container(border=True):
-                        # [V45] 使用紅色標題
                         st.markdown(f"<h3 style='color:#E74C3C;'>🔥 本週重點 (Urgent)</h3>", unsafe_allow_html=True)
                         if week_items:
                             for item in week_items: 
                                 st.markdown(item['html'], unsafe_allow_html=True)
                         else:
                             st.success("✅ 本週無重點事項")
-                
                 with c2:
                     with st.container(border=True):
-                        # [V45] 使用藍色標題
                         st.markdown(f"<h3 style='color:#2E86C1;'>🗓️ 本月重點 (Upcoming)</h3>", unsafe_allow_html=True)
                         if month_items:
                             for item in month_items: 
@@ -572,57 +566,146 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 7] 詳細資料檢視
+    # [區塊 7] 詳細資料檢視 (V51: 修復日期選擇器)
     # =========================================================================
     st.subheader("📋 詳細資料檢視 (可編輯模式)")
-    st.info(f"💡 提示：您可在此修改數值或勾選「刪除」來移除資料。所有變更需點擊「🔄 更新數據」或「🗑️ 刪除勾選資料」才會生效。")
-
-    column_cfg = {
-        "專案": st.column_config.TextColumn("專案", width="medium", disabled=False, required=True, pinned=True),
-        "🗑️ 刪除": st.column_config.CheckboxColumn("刪除", width="small", default=False)
-    }
+    st.info("💡 提示：您可直接在表格修改，或勾選左側「📝 編輯」開啟詳細編輯視窗。欲刪除資料請勾選「🗑️ 刪除」。")
 
     display_df = df_chart_source.drop(columns=['Calculated_Total_TWD'], errors='ignore').copy()
+    
+    if "🗑️ 刪除" in display_df.columns: display_df.drop(columns=["🗑️ 刪除"], inplace=True)
+    if "📝 編輯" in display_df.columns: display_df.drop(columns=["📝 編輯"], inplace=True)
+    
     display_df.insert(0, "🗑️ 刪除", False)
-
+    display_df.insert(0, "📝 編輯", False)
+    
     edited_df = st.data_editor(
-        display_df, 
-        column_config=column_cfg,
-        num_rows="dynamic", 
-        use_container_width=True
+        display_df,
+        column_config={
+            "📝 編輯": st.column_config.CheckboxColumn("編輯", help="勾選以開啟詳細編輯表單", default=False),
+            "🗑️ 刪除": st.column_config.CheckboxColumn("刪除", help="勾選以刪除資料", default=False),
+            "專案": st.column_config.TextColumn("專案", disabled=True)
+        },
+        num_rows="dynamic",
+        use_container_width=True,
+        key="main_data_editor"
     )
 
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+    selected_rows = edited_df[edited_df["📝 編輯"] == True]
+
+    if not selected_rows.empty:
+        target_index = selected_rows.index[0]
+        target_row = selected_rows.iloc[0]
+        project_name = target_row.get("專案", "Unknown")
+
+        st.markdown(f"### ✏️ 正在編輯專案：**{project_name}**")
+        
+        with st.form(key="detail_edit_form"):
+            new_values = {}
+            cols = list(display_df.columns)
+            for c in ["📝 編輯", "🗑️ 刪除"]:
+                if c in cols: cols.remove(c)
+            
+            text_fields = ['專案負責人', '目標規格', '信賴性測試要求', '對標競爭產品', '預估市場規模', 
+                           '目標客戶1', '目標客戶2', '目標客戶3', '目標客戶4', '目標客戶5', 
+                           '專案', '產品類別', '產業應用場景', '開案類別', '市場']
+            
+            # [V51 Fix] 確保這些欄位一定用 date_input
+            date_fields = ['預計訂單起始點', '專案開發完成時間', '開案時間', '設計驗證時間', '工程驗證時間']
+            
+            col_count = 3
+            cols_layout = st.columns(col_count)
+            
+            for i, col_name in enumerate(cols):
+                val = target_row[col_name]
+                col_obj = cols_layout[i % col_count]
+                
+                # 1. 文字欄位
+                if col_name in text_fields:
+                    new_values[col_name] = col_obj.text_input(col_name, value=str(val) if pd.notnull(val) else "")
+                
+                # 2. [V51] 日期欄位 (強制使用 date_input + 智慧解析)
+                elif col_name in date_fields:
+                    date_val = None
+                    # 嘗試解析正常日期
+                    dt = pd.to_datetime(val, errors='coerce')
+                    if pd.notnull(dt):
+                        date_val = dt.date()
+                    else:
+                        # 嘗試解析 2026Q2 格式
+                        dt_q = parse_quarter_date_end(val)
+                        if pd.notnull(dt_q):
+                            date_val = dt_q.date()
+                    
+                    # 顯示選擇器 (若 date_val 為 None，顯示空值)
+                    new_val = col_obj.date_input(col_name, value=date_val)
+                    new_values[col_name] = new_val
+                
+                # 3. 數值欄位
+                else:
+                    if pd.notnull(val):
+                        display_val = str(val)
+                        if display_val.endswith('.0'): display_val = display_val[:-2]
+                    else:
+                        display_val = ""
+                    
+                    new_val_str = col_obj.text_input(col_name, value=display_val, help="請輸入數字，若無資料請留空")
+                    
+                    if new_val_str.strip() == "":
+                        new_values[col_name] = np.nan
+                    else:
+                        try:
+                            new_values[col_name] = float(new_val_str)
+                        except:
+                            new_values[col_name] = new_val_str
+
+            submitted = st.form_submit_button("💾 儲存變更 (Save Changes)", type="primary")
+            
+            if submitted:
+                for col, new_val in new_values.items():
+                    st.session_state['working_df'].at[target_index, col] = new_val
+                    if target_index in st.session_state['full_df'].index:
+                        st.session_state['full_df'].at[target_index, col] = new_val
+                
+                st.session_state['working_df'].at[target_index, "📝 編輯"] = False
+                
+                st.toast(f"✅ 專案 {project_name} 資料已更新！", icon="💾")
+                st.rerun()
+
+    col_btn1, col_btn2 = st.columns([1, 1])
     
     with col_btn1:
-        if st.button("🔄 更新數據 (Update)", type="primary"):
-            data_to_update = edited_df.drop(columns=["🗑️ 刪除"])
-            st.session_state['full_df'].update(data_to_update)
-            new_rows = data_to_update.loc[~data_to_update.index.isin(st.session_state['full_df'].index)]
-            if not new_rows.empty:
-                st.session_state['full_df'] = pd.concat([st.session_state['full_df'], new_rows])
-            
-            if 'working_df' in st.session_state:
-                del st.session_state['working_df']
-
-            st.toast("✅ 數據已更新！", icon="🎉")
-            st.rerun()
-
-    with col_btn2:
-        if st.button("🗑️ 刪除勾選資料 (Delete Selected)", type="secondary"):
-            rows_to_delete = edited_df[edited_df["🗑️ 刪除"] == True].index
-            if len(rows_to_delete) > 0:
-                st.session_state['full_df'] = st.session_state['full_df'].drop(rows_to_delete)
+        col_act1, col_act2 = st.columns(2)
+        with col_act1:
+            if st.button("🔄 更新表格數據 (Update Table)", type="secondary"):
+                data_to_update = edited_df.drop(columns=["📝 編輯", "🗑️ 刪除"], errors='ignore')
+                st.session_state['full_df'].update(data_to_update)
+                
+                new_rows = data_to_update.loc[~data_to_update.index.isin(st.session_state['full_df'].index)]
+                if not new_rows.empty:
+                    st.session_state['full_df'] = pd.concat([st.session_state['full_df'], new_rows])
                 
                 if 'working_df' in st.session_state:
                     del st.session_state['working_df']
 
-                st.toast(f"✅ 已刪除 {len(rows_to_delete)} 筆資料！", icon="🗑️")
+                st.toast("✅ 表格數據已更新！", icon="🎉")
                 st.rerun()
-            else:
-                st.warning("⚠️ 請先勾選要刪除的資料列")
+        
+        with col_act2:
+            if st.button("🗑️ 刪除勾選資料 (Delete Selected)", type="primary"):
+                rows_to_delete = edited_df[edited_df["🗑️ 刪除"] == True].index
+                if len(rows_to_delete) > 0:
+                    st.session_state['full_df'] = st.session_state['full_df'].drop(rows_to_delete)
+                    
+                    if 'working_df' in st.session_state:
+                        del st.session_state['working_df']
 
-    with col_btn3:
+                    st.toast(f"✅ 已刪除 {len(rows_to_delete)} 筆資料！", icon="🗑️")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ 請先勾選要刪除的資料列")
+
+    with col_btn2:
         csv_buffer = io.StringIO()
         st.session_state['full_df'].to_csv(csv_buffer, index=False)
         csv_data = csv_buffer.getvalue().encode('utf-8-sig')
