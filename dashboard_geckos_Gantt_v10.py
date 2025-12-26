@@ -11,7 +11,7 @@ import numpy as np
 st.set_page_config(page_title="Geckos Dashboard Pro", layout="wide")
 
 # =========================================================================
-# 🔐 [資安強化] 身分驗證 (讀取 Secrets)
+# 🔐 [資安強化] 身分驗證
 # =========================================================================
 def check_password():
     """Returns `True` if the user had a correct password."""
@@ -56,6 +56,7 @@ uploaded_file = st.sidebar.file_uploader("請上傳專案總表 (Excel/CSV)", ty
 
 # --- 輔助函式 ---
 def parse_quarter_date_end(date_str):
+    """將 '2026Q2' 轉為該季的【最後一天】 (例如 2026-06-30)"""
     if pd.isna(date_str): return None
     date_str = str(date_str).strip().upper()
     match = re.search(r'(\d{4}).*Q(\d)', date_str)
@@ -90,7 +91,7 @@ if uploaded_file is not None:
             if '專案負責人' in df_raw.columns:
                 df_raw['專案負責人'] = df_raw['專案負責人'].astype(str).replace('nan', '')
 
-            # 數值前處理 (只針對必須運算的營收欄位補0，其他保留NaN)
+            # 數值前處理
             for col in df_raw.columns:
                 if '營收' in col: 
                      if df_raw[col].dtype == 'object':
@@ -269,19 +270,24 @@ if uploaded_file is not None:
             else:
                 month_style = type_style_map[p_type]
                 p_type_display = p_type
+            
+            pm_name = row.get('專案負責人', '')
+            pm_str = f"(👤 PM: {pm_name})" if pd.notnull(pm_name) and str(pm_name).strip() != '' else ""
 
             for key, col_name in col_map_alerts.items():
                 if col_name in df_alerts.columns:
                     raw_val = row[col_name]
-                    dt = pd.to_datetime(raw_val, errors='coerce')
+                    # V56 Fix: 季末修正
+                    dt = parse_quarter_date_end(raw_val)
                     if pd.isnull(dt):
-                        dt = parse_quarter_date_end(raw_val)
+                        dt = pd.to_datetime(raw_val, errors='coerce')
                     
                     if pd.notnull(dt):
                         icon = icon_map.get(key, '⚪')
                         display_name = stage_name_display.get(key, key)
                         days_diff = (dt - now).days
                         
+                        # --- 本週重點邏輯 ---
                         if start_week <= dt <= end_week:
                             if days_diff < 0:
                                 count_down_str = "(已完成)"
@@ -306,12 +312,13 @@ if uploaded_file is not None:
                                     {p_type_display} (Urgent)
                                 </div>
                                 <div style="{content_style}">
-                                    {icon} <b>{row['專案']}</b> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}
+                                    {icon} <b>{row['專案']}</b> <span style="font-size:0.9em; opacity:0.8;">{pm_str}</span> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}
                                 </div>
                             </div>
                             """
                             week_items.append({'dt': dt, 'html': card_html})
                         
+                        # --- 本月重點邏輯 ---
                         if dt.year == current_year and dt.month == current_month:
                             if days_diff < 0:
                                 count_down_str = "(已完成)"
@@ -336,7 +343,7 @@ if uploaded_file is not None:
                                     {p_type_display}
                                 </div>
                                 <div style="{content_style}">
-                                    {icon} <b>{row['專案']}</b> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}
+                                    {icon} <b>{row['專案']}</b> <span style="font-size:0.9em; opacity:0.8;">{pm_str}</span> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}
                                 </div>
                             </div>
                             """
@@ -366,7 +373,112 @@ if uploaded_file is not None:
                             st.info("ℹ️ 本月無重點事項")
 
     # =========================================================================
-    # [區塊 3] 專案研發全週期路徑圖 (Roadmap)
+    # [區塊 9] 專案負責人工作儀表板
+    # =========================================================================
+    if not df_chart_source.empty:
+        st.subheader("👥 專案負責人工作儀表板 (PM Workload Dashboard)")
+        
+        if '專案負責人' in df_chart_source.columns:
+            df_chart_source['專案負責人_display'] = df_chart_source['專案負責人'].apply(lambda x: x if pd.notnull(x) and str(x).strip() != '' else "未指派 (Unassigned)")
+            unique_pms = sorted(df_chart_source['專案負責人_display'].unique())
+            
+            type_style_map_pm = {
+                'NPDR': {'bg': '#EBF5FB', 'border': '#2E86C1'},
+                'MDR':  {'bg': '#E8F8F5', 'border': '#17A589'},
+                'TDR':  {'bg': '#FEF9E7', 'border': '#F1C40F'},
+                'default': {'bg': '#F2F3F4', 'border': '#95A5A6'}
+            }
+            
+            pm_col_map = {'NPDR': start_col, 'DV': '設計驗證時間', 'EV': '工程驗證時間', 'Order': '預計訂單起始點'}
+            pm_stage_name = {'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
+
+            now = pd.Timestamp.now().normalize()
+
+            for pm in unique_pms:
+                pm_projects = df_chart_source[df_chart_source['專案負責人_display'] == pm].drop_duplicates(subset=['專案'])
+                proj_count = len(pm_projects)
+                
+                with st.expander(f"👤 {pm} (手上專案數：{proj_count})", expanded=False):
+                    if not pm_projects.empty:
+                        pm_cards = []
+                        for idx, row in pm_projects.iterrows():
+                            p_type = row.get('開案類別', 'default')
+                            if pd.isna(p_type) or p_type not in type_style_map_pm:
+                                style = type_style_map_pm['default']
+                                p_type_display = p_type if pd.notnull(p_type) else "?"
+                            else:
+                                style = type_style_map_pm[p_type]
+                                p_type_display = p_type
+                            
+                            next_stage = None
+                            min_days = float('inf')
+                            
+                            for stage_code, col_name in pm_col_map.items():
+                                if col_name in pm_projects.columns:
+                                    raw_val = row[col_name]
+                                    
+                                    # V56 Fix: 優先解析季別
+                                    dt = parse_quarter_date_end(raw_val)
+                                    if pd.isnull(dt):
+                                        dt = pd.to_datetime(raw_val, errors='coerce')
+                                    
+                                    if pd.notnull(dt):
+                                        diff = (dt - now).days
+                                        if diff >= 0 and diff < min_days:
+                                            min_days = diff
+                                            next_stage = {
+                                                'name': pm_stage_name[stage_code],
+                                                'date': dt.strftime('%Y-%m-%d'),
+                                                'days': diff
+                                            }
+                            
+                            if next_stage:
+                                border_color = '#E74C3C' if next_stage['days'] < 7 else style['border']
+                                border_width = '5px' if next_stage['days'] < 7 else '5px'
+                                status_text = f"🔜 下一階段: {next_stage['name']}<br>📅 {next_stage['date']} (剩 {next_stage['days']} 天)"
+                                if next_stage['days'] < 7:
+                                    status_text = "🔥 " + status_text
+                            else:
+                                border_color = style['border']
+                                border_width = '5px'
+                                status_text = "✅ 所有階段已完成 (或未設定)"
+                                min_days = 9999
+
+                            card_html = f"""
+                            <div style="
+                                background-color: {style['bg']};
+                                border-top: {border_width} solid {border_color};
+                                padding: 10px;
+                                margin: 5px;
+                                border-radius: 5px;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                                height: 100%;
+                            ">
+                                <div style="font-weight: bold; color: {style['border']}; margin-bottom: 5px;">
+                                    {p_type_display}
+                                </div>
+                                <div style="font-size: 1.1em; font-weight: bold; margin-bottom: 5px;">
+                                    {row['專案']}
+                                </div>
+                                <div style="font-size: 0.9em; color: #555;">
+                                    {status_text}
+                                </div>
+                            </div>
+                            """
+                            pm_cards.append({'days': min_days, 'html': card_html})
+                        
+                        pm_cards.sort(key=lambda x: x['days'])
+                        cols = st.columns(3)
+                        for i, card in enumerate(pm_cards):
+                            with cols[i % 3]:
+                                st.markdown(card['html'], unsafe_allow_html=True)
+                    else:
+                        st.info("此 PM 目前無專案")
+
+    st.divider()
+
+    # =========================================================================
+    # [區塊 3] 專案研發全週期路徑圖 (Roadmap) - V60 (混合顯示模式)
     # =========================================================================
     current_types = open_type_filter if open_type_filter else ["全部"]
     type_label = ", ".join(current_types)
@@ -446,8 +558,10 @@ if uploaded_file is not None:
                         if start_node == 'DV' and end_node == 'EV':   return '#9B59B6'
                         return '#7F8C8D'
 
+                    # [V60] 1. 繪製連線 (只要有兩個點就能連，不再強制要求 NPDR)
                     for p in plot_data:
-                        if not p['has_data']: continue
+                        if not p['has_data']: continue # 這裡只擋完全沒日期的
+                        
                         points = p['sorted_points']
                         if len(points) < 2: continue
                             
@@ -466,6 +580,8 @@ if uploaded_file is not None:
                                 hover_lines.append(f"⏳ 距 {end_node} 剩下: <b>{weeks_remaining:.1f} 週 ({days_remaining} 天)</b>")
                             else:
                                 hover_lines.append(f"✅ {end_node} 已完成/過期 ({abs(weeks_remaining):.1f} 週前)")
+                            
+                            # 只在真的有 NPDR 時才顯示開案多久
                             if start_node == 'NPDR' and days_elapsed > 0:
                                 hover_lines.append(f"🚩 距 NPDR 開案已過: <b>{weeks_elapsed:.1f} 週 ({days_elapsed} 天)</b>")
 
@@ -491,6 +607,7 @@ if uploaded_file is not None:
                                 text=text_trace, hovertemplate="%{text}<extra></extra>", showlegend=False
                             ))
                     
+                    # [V60] 2. 繪製標準節點 (只要該欄位有值就畫，不再檢查 NPDR)
                     markers_config = {
                         'NPDR':  {'color': '#2E86C1', 'symbol': 'circle', 'name': 'NPDR 開案'},
                         'DV':    {'color': '#F39C12', 'symbol': 'diamond', 'name': '設計驗證 (DV)'},
@@ -502,6 +619,7 @@ if uploaded_file is not None:
                         x_vals, y_vals, texts, hover_texts = [], [], [], []
                         for p in plot_data:
                             if not p['has_data']: continue
+                            
                             if key in p['dates']:
                                 dt = p['dates'][key]
                                 x_vals.append(get_week_str(dt))
@@ -527,16 +645,27 @@ if uploaded_file is not None:
                                 name=config['name'], text=texts, hovertext=hover_texts, hoverinfo="text", textposition="bottom center"
                             ))
                     
-                    no_data_x, no_data_y, no_data_hover = [], [], []
+                    # [V60] 3. 繪製 "規劃中" 沙漏 (只要缺 NPDR 就畫)
+                    planning_x, planning_y, planning_hover = [], [], []
                     for p in plot_data:
-                        if not p['has_data']:
-                            no_data_x.append(current_week_str) 
-                            no_data_y.append(p['專案'])
-                            no_data_hover.append(f"<b>{p['專案']}</b><br>❌ 無有效時間資料")
-                    if no_data_x:
-                        fig.add_trace(go.Scatter(x=no_data_x, y=no_data_y, mode='markers', marker=dict(color='gray', symbol='circle-x', size=12), name='無時間資料', hovertext=no_data_hover, hoverinfo="text"))
+                        # 條件：如果沒有 NPDR (無論有沒有其他日期)，都標示沙漏以提醒
+                        if 'NPDR' not in p['dates']:
+                            planning_x.append(current_week_str) 
+                            planning_y.append(p['專案'])
+                            planning_hover.append(f"<b>{p['專案']}</b><br>⏳ 時程規劃中 (待提供)<br><span style='color:gray; font-size:0.8em'>請 PM 盡快補齊時程</span>")
+                    
+                    if planning_x:
+                        fig.add_trace(go.Scatter(
+                            x=planning_x, 
+                            y=planning_y, 
+                            mode='markers', 
+                            marker=dict(color='#95A5A6', symbol='hourglass', size=12, line=dict(width=1, color='#7F8C8D')), 
+                            name='⏳ 規劃中 (待提供)', 
+                            hovertext=planning_hover, 
+                            hoverinfo="text"
+                        ))
 
-                    legend_items = [("🟦 NPDR開案", '#2E86C1'), ("🟧 標準設計 (往DV)", '#F39C12'), ("🟪 標準工程 (往EV)", '#9B59B6'), ("🟩 標準導入 (往Order)", '#2ECC71'), ("⬜ 其他路徑", '#7F8C8D'), ("❌ 無資料", 'gray')]
+                    legend_items = [("🟦 NPDR開案", '#2E86C1'), ("🟧 標準設計 (往DV)", '#F39C12'), ("🟪 標準工程 (往EV)", '#9B59B6'), ("🟩 標準導入 (往Order)", '#2ECC71'), ("⬜ 其他路徑", '#7F8C8D'), ("⏳ 規劃中", '#95A5A6')]
                     for name, color in legend_items:
                          fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color=color, width=6), name=name))
                     
@@ -566,7 +695,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 7] 詳細資料檢視 (V51: 修復日期選擇器)
+    # [區塊 7] 詳細資料檢視 (V57: 強制字串型別以修復編輯Bug)
     # =========================================================================
     st.subheader("📋 詳細資料檢視 (可編輯模式)")
     st.info("💡 提示：您可直接在表格修改，或勾選左側「📝 編輯」開啟詳細編輯視窗。欲刪除資料請勾選「🗑️ 刪除」。")
@@ -576,6 +705,16 @@ if uploaded_file is not None:
     if "🗑️ 刪除" in display_df.columns: display_df.drop(columns=["🗑️ 刪除"], inplace=True)
     if "📝 編輯" in display_df.columns: display_df.drop(columns=["📝 編輯"], inplace=True)
     
+    # [V57] 修正：強制將特定欄位轉為字串格式
+    cols_to_stringify = [
+        '專案負責人', '目標規格', '信賴性測試要求', '對標競爭產品', '預估市場規模', 
+        '目標客戶1', '目標客戶2', '目標客戶3', '目標客戶4', '目標客戶5', 
+        '預計訂單起始點', '專案開發完成時間', '開案時間', '設計驗證時間', '工程驗證時間'
+    ]
+    for c in cols_to_stringify:
+        if c in display_df.columns:
+            display_df[c] = display_df[c].astype(str).replace('nan', '').replace('NaT', '')
+
     display_df.insert(0, "🗑️ 刪除", False)
     display_df.insert(0, "📝 編輯", False)
     
@@ -584,7 +723,8 @@ if uploaded_file is not None:
         column_config={
             "📝 編輯": st.column_config.CheckboxColumn("編輯", help="勾選以開啟詳細編輯表單", default=False),
             "🗑️ 刪除": st.column_config.CheckboxColumn("刪除", help="勾選以刪除資料", default=False),
-            "專案": st.column_config.TextColumn("專案", disabled=True)
+            # [V55] 固定專案欄位
+            "專案": st.column_config.TextColumn("專案", disabled=True, pinned=True)
         },
         num_rows="dynamic",
         use_container_width=True,
@@ -610,7 +750,6 @@ if uploaded_file is not None:
                            '目標客戶1', '目標客戶2', '目標客戶3', '目標客戶4', '目標客戶5', 
                            '專案', '產品類別', '產業應用場景', '開案類別', '市場']
             
-            # [V51 Fix] 確保這些欄位一定用 date_input
             date_fields = ['預計訂單起始點', '專案開發完成時間', '開案時間', '設計驗證時間', '工程驗證時間']
             
             col_count = 3
@@ -620,30 +759,24 @@ if uploaded_file is not None:
                 val = target_row[col_name]
                 col_obj = cols_layout[i % col_count]
                 
-                # 1. 文字欄位
                 if col_name in text_fields:
                     new_values[col_name] = col_obj.text_input(col_name, value=str(val) if pd.notnull(val) else "")
                 
-                # 2. [V51] 日期欄位 (強制使用 date_input + 智慧解析)
                 elif col_name in date_fields:
                     date_val = None
-                    # 嘗試解析正常日期
                     dt = pd.to_datetime(val, errors='coerce')
                     if pd.notnull(dt):
                         date_val = dt.date()
                     else:
-                        # 嘗試解析 2026Q2 格式
                         dt_q = parse_quarter_date_end(val)
                         if pd.notnull(dt_q):
                             date_val = dt_q.date()
                     
-                    # 顯示選擇器 (若 date_val 為 None，顯示空值)
                     new_val = col_obj.date_input(col_name, value=date_val)
                     new_values[col_name] = new_val
                 
-                # 3. 數值欄位
                 else:
-                    if pd.notnull(val):
+                    if pd.notnull(val) and str(val) != 'nan' and str(val) != '':
                         display_val = str(val)
                         if display_val.endswith('.0'): display_val = display_val[:-2]
                     else:
@@ -720,7 +853,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 4] & [區塊 5]
+    # [區塊 4] & [區塊 5] (折疊收納)
     # =========================================================================
     if not df_chart_source.empty:
         with st.expander("📊 圖表分析 (產品類別 & 市場應用) - 點擊展開", expanded=False):
@@ -742,6 +875,7 @@ if uploaded_file is not None:
                 st.subheader("🌍 市場 x 應用場景")
                 if total_revenue_twd > 0 and '市場' in df_chart_source.columns and '產業應用場景' in df_chart_source.columns:
                     df_market = df_chart_source.groupby(['市場', '產業應用場景'])['Calculated_Total_TWD'].sum().reset_index()
+                    # [V35] 修改顯示格式為千分位
                     fig_market = px.bar(df_market, x='市場', y='Calculated_Total_TWD', color='產業應用場景', 
                                         barmode='stack', text_auto=',.0f', title='各地區市場應用 (含RMB)')
                     st.plotly_chart(fig_market, use_container_width=True)
@@ -751,7 +885,7 @@ if uploaded_file is not None:
                     st.info("無營收數據")
 
     # =========================================================================
-    # [區塊 6] 營收 Top 10 專案
+    # [區塊 6] 營收 Top 10 專案 (折疊收納)
     # =========================================================================
     st.divider()
     with st.expander("🏆 營收 Top 10 專案 - 點擊展開", expanded=False):
@@ -759,6 +893,7 @@ if uploaded_file is not None:
             df_chart = df_chart_source.groupby('專案')['Calculated_Total_TWD'].sum().reset_index()
             df_chart = df_chart.nlargest(10, 'Calculated_Total_TWD').sort_values('Calculated_Total_TWD', ascending=True)
             
+            # [V35] 修改顯示格式為千分位
             fig_bar = px.bar(df_chart, x='Calculated_Total_TWD', y='專案', orientation='h', text_auto=',.0f', 
                              color='Calculated_Total_TWD', color_continuous_scale='Blues')
             fig_bar.update_layout(xaxis_title="預估營收 (含RMB換算)", yaxis_title="專案")
