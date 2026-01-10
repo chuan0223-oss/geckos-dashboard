@@ -77,8 +77,10 @@ def get_week_str(dt):
 if uploaded_file is not None:
     # 2. 讀取與初始化資料
     try:
+        # 取得檔案識別 ID (優先使用 file_id，若無則用 name)
         file_id = uploaded_file.file_id if hasattr(uploaded_file, 'file_id') else uploaded_file.name
         
+        # 檢查是否為新檔案
         if 'full_df' not in st.session_state or st.session_state.get('current_file_id') != file_id:
             if uploaded_file.name.endswith('.csv'):
                 df_raw = pd.read_csv(uploaded_file)
@@ -99,8 +101,15 @@ if uploaded_file is not None:
                      else:
                         df_raw[col] = df_raw[col].fillna(0)
 
+            # 更新 Global State
             st.session_state['full_df'] = df_raw
             st.session_state['current_file_id'] = file_id
+            
+            # [V65.6 Fix] 強制清除暫存的 working_df，確保新檔案被載入時不會沿用舊資料
+            if 'working_df' in st.session_state:
+                del st.session_state['working_df']
+            if 'last_filtered_shape' in st.session_state:
+                del st.session_state['last_filtered_shape']
 
     except Exception as e:
         st.error(f"檔案讀取失敗: {e}")
@@ -127,7 +136,7 @@ if uploaded_file is not None:
         st.stop()
 
     # =========================================================================
-    # [區塊 1] 篩選條件 (V65.1: 修正縮排 Bug)
+    # [區塊 1] 篩選條件
     # =========================================================================
     st.sidebar.header("🔍 專案篩選器")
     
@@ -203,7 +212,9 @@ if uploaded_file is not None:
     if 'working_df' not in st.session_state:
         st.session_state['working_df'] = df_filtered
 
+    # 更新 Session State
     current_shape = df_filtered.shape
+    # 若篩選後資料改變，更新 working_df
     if st.session_state['last_filtered_shape'] != current_shape or \
        not df_filtered.index.equals(st.session_state['working_df'].index):
         st.session_state['working_df'] = df_filtered
@@ -444,7 +455,6 @@ if uploaded_file is not None:
     # =========================================================================
     # [區塊 3] 專案研發全週期路徑圖 (Roadmap)
     # =========================================================================
-    # [V64.5 Fix]: 定義 current_types 避免 NameError
     current_types = open_type_filter if open_type_filter else ["全部"]
     type_label = ", ".join(current_types)
     st.subheader(f"🚀 專案研發全週期路徑圖 (Roadmap) - 類別: [{type_label}]")
@@ -458,7 +468,7 @@ if uploaded_file is not None:
             df_roadmap_unique = df_chart_source.drop_duplicates(subset=['專案'])
             
             start_col = None
-            possible_start_cols = ['開案時間', '开案时间', 'NPDR開案時間', 'NPDR开案时间', 'NPDR']
+            possible_start_cols = ['開案時間', '开案時間', 'NPDR開案時間', 'NPDR开案时间', 'NPDR']
             for col in possible_start_cols:
                 if col in df_roadmap_unique.columns:
                     start_col = col
