@@ -77,10 +77,8 @@ def get_week_str(dt):
 if uploaded_file is not None:
     # 2. 讀取與初始化資料
     try:
-        # 取得檔案識別 ID (優先使用 file_id，若無則用 name)
         file_id = uploaded_file.file_id if hasattr(uploaded_file, 'file_id') else uploaded_file.name
         
-        # 檢查是否為新檔案
         if 'full_df' not in st.session_state or st.session_state.get('current_file_id') != file_id:
             if uploaded_file.name.endswith('.csv'):
                 df_raw = pd.read_csv(uploaded_file)
@@ -101,11 +99,10 @@ if uploaded_file is not None:
                      else:
                         df_raw[col] = df_raw[col].fillna(0)
 
-            # 更新 Global State
             st.session_state['full_df'] = df_raw
             st.session_state['current_file_id'] = file_id
             
-            # [V65.6 Fix] 強制清除暫存的 working_df，確保新檔案被載入時不會沿用舊資料
+            # [V65.6] 強制清除暫存
             if 'working_df' in st.session_state:
                 del st.session_state['working_df']
             if 'last_filtered_shape' in st.session_state:
@@ -212,9 +209,7 @@ if uploaded_file is not None:
     if 'working_df' not in st.session_state:
         st.session_state['working_df'] = df_filtered
 
-    # 更新 Session State
     current_shape = df_filtered.shape
-    # 若篩選後資料改變，更新 working_df
     if st.session_state['last_filtered_shape'] != current_shape or \
        not df_filtered.index.equals(st.session_state['working_df'].index):
         st.session_state['working_df'] = df_filtered
@@ -468,7 +463,7 @@ if uploaded_file is not None:
             df_roadmap_unique = df_chart_source.drop_duplicates(subset=['專案'])
             
             start_col = None
-            possible_start_cols = ['開案時間', '开案時間', 'NPDR開案時間', 'NPDR开案时间', 'NPDR']
+            possible_start_cols = ['開案時間', '开案时间', 'NPDR開案時間', 'NPDR开案时间', 'NPDR']
             for col in possible_start_cols:
                 if col in df_roadmap_unique.columns:
                     start_col = col
@@ -668,7 +663,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 10] 預計訂單 Top 10 (V65.4: Dual Key Sorting + Visual Zero)
+    # [區塊 10] 預計訂單 Top 10 (V65.3: Visualizing the Zero + V65.4 Dual Sort)
     # =========================================================================
     st.divider()
     with st.expander("⏳ 預計訂單即將到期 Top 10 (Countdown to Order) - By Project Deadline", expanded=True):
@@ -693,14 +688,11 @@ if uploaded_file is not None:
             df_time['OrderDate'] = df_time['預計訂單起始點'].apply(convert_date_for_chart)
             df_time = df_time.dropna(subset=['OrderDate'])
             
-            # Group by Revenue first
             grp_cols = ['專案']
             df_rev_agg = df_chart_source.groupby(grp_cols)[[col_twd, col_rmb] if col_rmb else [col_twd]].sum().reset_index()
             
-            # Deduplicate by earliest date
             df_time_dedup = df_time.sort_values('OrderDate').drop_duplicates(subset=['專案'], keep='first')
             
-            # Merge
             df_final = pd.merge(df_time_dedup, df_rev_agg, on='專案', how='left', suffixes=('', '_sum'))
             
             twd_col_sum = f"{col_twd}_sum" if f"{col_twd}_sum" in df_final.columns else col_twd
@@ -710,7 +702,7 @@ if uploaded_file is not None:
                 now = pd.Timestamp.now().normalize()
                 df_final['DaysDiff'] = (df_final['OrderDate'] - now).dt.days
                 
-                # [V65.4 Logic] Calulate Total Rev for Sorting
+                # [V65.4 Logic] Total Revenue for Sort
                 df_final['Total_Revenue_Sort'] = df_final[twd_col_sum].fillna(0) + (df_final[rmb_col_sum].fillna(0) * rmb_rate if rmb_col_sum else 0)
 
                 # [V65.2] Logic: Filter out past due
@@ -722,13 +714,12 @@ if uploaded_file is not None:
                     # [V65.4] Dual Sort: Days (Asc) -> Revenue (Desc)
                     df_final = df_final.sort_values(by=['DaysDiff', 'Total_Revenue_Sort'], ascending=[True, False])
                     
-                    # Take Strict Top 10
                     df_plot = df_final.head(10).copy()
                     
-                    # Reverse for Plotly (Bottom-Up)
+                    # Reverse for Plotly
                     df_plot = df_plot.sort_values(by=['DaysDiff', 'Total_Revenue_Sort'], ascending=[False, True])
                     
-                    # [V65.3] Visual Buffer for 0 days
+                    # [V65.3] Visual Buffer
                     max_val = df_plot['DaysDiff'].max()
                     visual_buffer = max(1, max_val * 0.02) if max_val > 0 else 1
                     df_plot['Plot_Value'] = df_plot['DaysDiff'].replace(0, visual_buffer)
@@ -765,7 +756,6 @@ if uploaded_file is not None:
                     
                     df_plot['Text_Rev'] = df_plot.apply(get_rev_text, axis=1)
                     
-                    # Hybrid Positioning
                     threshold = max_val * 0.15 if max_val > 0 else 0
                     
                     final_bar_text = []
@@ -885,7 +875,7 @@ if uploaded_file is not None:
             st.info("無營收數據")
 
     # =========================================================================
-    # [區塊 7] 詳細資料檢視 (V64.1: Moved to Bottom)
+    # [區塊 7] 詳細資料檢視 (V65.7 Fix: Remove .0)
     # =========================================================================
     st.divider()
     st.subheader("📋 詳細資料檢視 (可編輯模式)")
@@ -896,7 +886,7 @@ if uploaded_file is not None:
     if "🗑️ 刪除" in display_df.columns: display_df.drop(columns=["🗑️ 刪除"], inplace=True)
     if "📝 編輯" in display_df.columns: display_df.drop(columns=["📝 編輯"], inplace=True)
     
-    # 強制字串型別
+    # 強制字串型別 [V65.7 Fix: remove .0]
     cols_to_stringify = [
         '專案負責人', '目標規格', '信賴性測試要求', '對標競爭產品', '預估市場規模', 
         '目標客戶1', '目標客戶2', '目標客戶3', '目標客戶4', '目標客戶5', 
@@ -905,6 +895,8 @@ if uploaded_file is not None:
     for c in cols_to_stringify:
         if c in display_df.columns:
             display_df[c] = display_df[c].astype(str).replace('nan', '').replace('NaT', '')
+            # Remove trailing .0 from stringified floats
+            display_df[c] = display_df[c].str.replace(r'\.0$', '', regex=True)
 
     display_df.insert(0, "🗑️ 刪除", False)
     display_df.insert(0, "📝 編輯", False)
@@ -950,7 +942,7 @@ if uploaded_file is not None:
                 col_obj = cols_layout[i % col_count]
                 
                 if col_name in text_fields:
-                    new_values[col_name] = col_obj.text_input(col_name, value=str(val) if pd.notnull(val) else "")
+                    new_values[col_name] = col_obj.text_input(col_name, value=str(val) if pd.notnull(val) and str(val)!='nan' else "")
                 elif col_name in date_fields:
                     date_val = None
                     dt = pd.to_datetime(val, errors='coerce')
@@ -985,7 +977,6 @@ if uploaded_file is not None:
                 st.toast(f"✅ 專案 {project_name} 資料已更新！", icon="💾")
                 st.rerun()
 
-    # V65.5: Update save buttons
     col_btn1, col_btn2 = st.columns([1, 1])
     
     with col_btn1:
@@ -1030,11 +1021,10 @@ if uploaded_file is not None:
                 mime="text/csv"
             )
         
-        # 2. PM Export (Masked)
+        # 2. PM Export
         with col_dl2:
             df_pm = st.session_state['full_df'].copy()
-            cols_to_blank = ['預期毛利率', '預估市場規模', '預估市占率'] # Using 占 based on file
-            # Also handle potential typo 佔
+            cols_to_blank = ['預期毛利率', '預估市場規模', '預估市占率']
             if '預估市佔率' in df_pm.columns: cols_to_blank.append('預估市佔率')
             
             for c in cols_to_blank:
@@ -1048,6 +1038,6 @@ if uploaded_file is not None:
             st.download_button(
                 label="💾 專案存檔 for PM (Masked Data)",
                 data=csv_data_pm,
-                file_name=f"Geckos_project_data{today_str}_PM.csv", # Added _PM for safety
+                file_name=f"Geckos_project_data{today_str}_PM.csv",
                 mime="text/csv"
             )
