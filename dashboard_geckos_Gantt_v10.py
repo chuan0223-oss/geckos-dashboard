@@ -309,9 +309,20 @@ if uploaded_file is not None:
                                 content_style = f"color: {urgent_style['text']};"
 
                             card_html = f"""
-                            <div style="background-color: {urgent_style['bg']}; border-left: 5px solid {urgent_style['border']}; padding: 10px; margin-bottom: 8px; border-radius: 4px; box-shadow: 1px 1px 3px rgba(0,0,0,0.1);">
-                                <div style="font-size: 0.85em; font-weight: bold; color: {urgent_style['text']}; margin-bottom: 4px;">{p_type_display} (Urgent)</div>
-                                <div style="{content_style}">{icon} <b>{row['專案']}</b> <span style="font-size:0.9em; opacity:0.8;">{pm_str}</span> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}</div>
+                            <div style="
+                                background-color: {urgent_style['bg']};
+                                border-left: 5px solid {urgent_style['border']};
+                                padding: 10px;
+                                margin-bottom: 8px;
+                                border-radius: 4px;
+                                box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
+                            ">
+                                <div style="font-size: 0.85em; font-weight: bold; color: {urgent_style['text']}; margin-bottom: 4px;">
+                                    {p_type_display} (Urgent)
+                                </div>
+                                <div style="{content_style}">
+                                    {icon} <b>{row['專案']}</b> <span style="font-size:0.9em; opacity:0.8;">{pm_str}</span> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}
+                                </div>
                             </div>
                             """
                             week_items.append({'dt': dt, 'html': card_html})
@@ -325,9 +336,20 @@ if uploaded_file is not None:
                                 content_style = "color: #333333;"
 
                             card_html = f"""
-                            <div style="background-color: {month_style['bg']}; border-left: 5px solid {month_style['border']}; padding: 10px; margin-bottom: 8px; border-radius: 4px; box-shadow: 1px 1px 3px rgba(0,0,0,0.1);">
-                                <div style="font-size: 0.85em; font-weight: bold; color: {month_style['border']}; margin-bottom: 4px;">{p_type_display}</div>
-                                <div style="{content_style}">{icon} <b>{row['專案']}</b> <span style="font-size:0.9em; opacity:0.8;">{pm_str}</span> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}</div>
+                            <div style="
+                                background-color: {month_style['bg']};
+                                border-left: 5px solid {month_style['border']};
+                                padding: 10px;
+                                margin-bottom: 8px;
+                                border-radius: 4px;
+                                box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
+                            ">
+                                <div style="font-size: 0.85em; font-weight: bold; color: {month_style['border']}; margin-bottom: 4px;">
+                                    {p_type_display}
+                                </div>
+                                <div style="{content_style}">
+                                    {icon} <b>{row['專案']}</b> <span style="font-size:0.9em; opacity:0.8;">{pm_str}</span> - {display_name} | {dt.strftime('%Y-%m-%d')} {count_down_str}
+                                </div>
                             </div>
                             """
                             month_items.append({'dt': dt, 'html': card_html})
@@ -422,6 +444,7 @@ if uploaded_file is not None:
     # =========================================================================
     # [區塊 3] 專案研發全週期路徑圖 (Roadmap)
     # =========================================================================
+    # [V64.5 Fix]: 定義 current_types 避免 NameError
     current_types = open_type_filter if open_type_filter else ["全部"]
     type_label = ", ".join(current_types)
     st.subheader(f"🚀 專案研發全週期路徑圖 (Roadmap) - 類別: [{type_label}]")
@@ -952,6 +975,7 @@ if uploaded_file is not None:
                 st.toast(f"✅ 專案 {project_name} 資料已更新！", icon="💾")
                 st.rerun()
 
+    # V65.5: Update save buttons
     col_btn1, col_btn2 = st.columns([1, 1])
     
     with col_btn1:
@@ -980,7 +1004,40 @@ if uploaded_file is not None:
                     st.warning("⚠️ 請先勾選要刪除的資料列")
 
     with col_btn2:
+        today_str = datetime.datetime.now().strftime("%Y%m%d")
+        
+        # 1. Full Export
         csv_buffer = io.StringIO()
         st.session_state['full_df'].to_csv(csv_buffer, index=False)
         csv_data = csv_buffer.getvalue().encode('utf-8-sig')
-        st.download_button(label="💾 完整存檔 (Download Full CSV)", data=csv_data, file_name="project_data_full.csv", mime="text/csv")
+        
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            st.download_button(
+                label="💾 完整存檔 (Full Download)",
+                data=csv_data,
+                file_name=f"Geckos_project_data{today_str}.csv",
+                mime="text/csv"
+            )
+        
+        # 2. PM Export (Masked)
+        with col_dl2:
+            df_pm = st.session_state['full_df'].copy()
+            cols_to_blank = ['預期毛利率', '預估市場規模', '預估市占率'] # Using 占 based on file
+            # Also handle potential typo 佔
+            if '預估市佔率' in df_pm.columns: cols_to_blank.append('預估市佔率')
+            
+            for c in cols_to_blank:
+                if c in df_pm.columns:
+                    df_pm[c] = ""
+            
+            csv_buffer_pm = io.StringIO()
+            df_pm.to_csv(csv_buffer_pm, index=False)
+            csv_data_pm = csv_buffer_pm.getvalue().encode('utf-8-sig')
+            
+            st.download_button(
+                label="💾 專案存檔 for PM (Masked Data)",
+                data=csv_data_pm,
+                file_name=f"Geckos_project_data{today_str}_PM.csv", # Added _PM for safety
+                mime="text/csv"
+            )
