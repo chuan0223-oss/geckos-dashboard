@@ -143,14 +143,29 @@ if uploaded_file is not None:
     
     icon_map = {'NPDR': '🔵', 'DV': '🔶', 'EV': '🟥', 'Order': '🟢'}
     
-    start_col = None
-    possible_start_cols = ['開案時間', '开案时间', 'NPDR開案時間', 'NPDR开案时间', 'NPDR']
-    for col in possible_start_cols:
-        if col in df_full.columns:
-            start_col = col
-            break
-    if not start_col: start_col = '開案時間'
+    # [V69.6 Fix] Define priority lists for columns instead of single value
+    cols_priority_npdr = ['NPDR', 'NPDR時間', 'NPDR開案時間', '開案時間', '开案时间']
+    cols_priority_dv = ['設計驗證時間', 'DV', 'DV時間', '設計驗證']
+    cols_priority_ev = ['工程驗證時間', 'EV', 'EV時間', '工程驗證']
+    cols_priority_order = ['預計訂單起始點', 'Order', '預計訂單']
     
+    # Helper to find first valid date from a list of columns for a row
+    def get_first_valid_date(row, cols_list):
+        for c in cols_list:
+            if c in row.index:
+                val = row[c]
+                dt = parse_quarter_date_end(val)
+                if pd.isnull(dt): dt = pd.to_datetime(val, errors='coerce')
+                if pd.notnull(dt): return dt
+        return pd.NaT
+
+    # Determine start_col just for reference/Block 8 (use the first available one)
+    start_col = '開案時間'
+    for c in cols_priority_npdr:
+        if c in df_full.columns:
+            start_col = c
+            break
+            
     col_map_alerts = {'NPDR': start_col, 'DV': '設計驗證時間', 'EV': '工程驗證時間', 'Order': '預計訂單起始點'}
 
     # =========================================================================
@@ -317,15 +332,11 @@ if uploaded_file is not None:
         now = pd.Timestamp.now().normalize()
         start_week_date = now - pd.Timedelta(days=now.dayofweek)
         end_week_date = start_week_date + pd.Timedelta(days=6)
-        
         last_week_start = start_week_date - pd.Timedelta(days=7)
         last_week_end = start_week_date - pd.Timedelta(days=1)
         
         df_alerts = df_chart_source.drop_duplicates(subset=['專案'])
-        
-        last_week_items = []
-        this_week_items = []
-        month_items = []
+        last_week_items, this_week_items, month_items = [], [], []
         
         for idx, row in df_alerts.iterrows():
             p_type = row.get('開案類別', 'default')
@@ -333,32 +344,34 @@ if uploaded_file is not None:
             pm_name = row.get('專案負責人', '')
             pm_str = f"(PM: {pm_name})" if pd.notnull(pm_name) else ""
             
-            check_cols = col_map_alerts.copy()
+            # [V69.6] Enhanced Alert Logic using Priority Columns
+            check_cols = {'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
+            
+            # Type specific adjustments for alerts
             if p_type == 'TDR':
-                if '開案' in df_alerts.columns: check_cols['TDR開案'] = '開案'
-                if '轉NPDR時間' in df_alerts.columns: check_cols['轉NPDR'] = '轉NPDR時間'
+                if '開案' in df_alerts.columns: check_cols['TDR開案'] = ['開案']
+                if '轉NPDR時間' in df_alerts.columns: check_cols['轉NPDR'] = ['轉NPDR時間']
+            elif p_type == 'MDR':
+                if '開案' in df_alerts.columns: check_cols['MDR開案'] = ['開案']
 
-            for key, col_name in check_cols.items():
-                if col_name in df_alerts.columns:
-                    raw_val = row[col_name]
-                    dt = parse_quarter_date_end(raw_val)
-                    if pd.isnull(dt): dt = pd.to_datetime(raw_val, errors='coerce')
+            for key, col_list in check_cols.items():
+                dt = get_first_valid_date(row, col_list)
+                
+                if pd.notnull(dt):
+                    days_diff = (dt - now).days
                     
-                    if pd.notnull(dt):
-                        days_diff = (dt - now).days
-                        
-                        if last_week_start <= dt <= last_week_end:
-                            last_week_items.append({'dt': dt, 'html': f"<div style='background:{past_style['bg']};border-left:5px solid {past_style['border']};padding:8px;margin:6px;border-radius:4px'><div style='font-size:0.8em;font-weight:bold;color:{past_style['text']}'>{p_type} (已完成)</div><div style='color:{past_style['text']};font-size:0.9em'><b>{row['專案']}</b> {pm_str}<br>{key} | {dt.strftime('%m-%d')}</div></div>"})
-                        
-                        if start_week_date <= dt <= end_week_date:
-                            status = "(已過)" if days_diff < 0 else ("(今天)" if days_diff==0 else f"(剩 {days_diff} 天)")
-                            bg = style['bg'] if days_diff >= 0 else past_style['bg']
-                            border = style['border'] if days_diff >= 0 else past_style['border']
-                            txt = style['text'] if days_diff >= 0 else past_style['text']
-                            this_week_items.append({'dt': dt, 'html': f"<div style='background:{bg};border-left:5px solid {border};padding:8px;margin:6px;border-radius:4px'><div style='font-size:0.8em;font-weight:bold;color:{txt}'>{p_type}</div><div style='color:#333;font-size:0.9em'><b>{row['專案']}</b> {pm_str}<br>{key} | {dt.strftime('%m-%d')} {status}</div></div>"})
-                        
-                        if dt.year == now.year and dt.month == now.month:
-                            month_items.append({'dt': dt, 'days_diff': days_diff, 'p_type': p_type, 'pm': pm_str, 'key': key, 'proj': row['專案'], 'style': style})
+                    if last_week_start <= dt <= last_week_end:
+                        last_week_items.append({'dt': dt, 'html': f"<div style='background:{past_style['bg']};border-left:5px solid {past_style['border']};padding:8px;margin:6px;border-radius:4px'><div style='font-size:0.8em;font-weight:bold;color:{past_style['text']}'>{p_type} (已完成)</div><div style='color:{past_style['text']};font-size:0.9em'><b>{row['專案']}</b> {pm_str}<br>{key} | {dt.strftime('%m-%d')}</div></div>"})
+                    
+                    if start_week_date <= dt <= end_week_date:
+                        status = "(已過)" if days_diff < 0 else ("(今天)" if days_diff==0 else f"(剩 {days_diff} 天)")
+                        bg = style['bg'] if days_diff >= 0 else past_style['bg']
+                        border = style['border'] if days_diff >= 0 else past_style['border']
+                        txt = style['text'] if days_diff >= 0 else past_style['text']
+                        this_week_items.append({'dt': dt, 'html': f"<div style='background:{bg};border-left:5px solid {border};padding:8px;margin:6px;border-radius:4px'><div style='font-size:0.8em;font-weight:bold;color:{txt}'>{p_type}</div><div style='color:#333;font-size:0.9em'><b>{row['專案']}</b> {pm_str}<br>{key} | {dt.strftime('%m-%d')} {status}</div></div>"})
+                    
+                    if dt.year == now.year and dt.month == now.month:
+                        month_items.append({'dt': dt, 'days_diff': days_diff, 'p_type': p_type, 'pm': pm_str, 'key': key, 'proj': row['專案'], 'style': style})
 
         with st.expander("🔔 專案重點時程 (Milestone Alerts)", expanded=True):
             c1, c2, c3 = st.columns(3)
@@ -409,26 +422,24 @@ if uploaded_file is not None:
                         p_type = row.get('開案類別', 'default')
                         style = type_style_map.get(p_type, type_style_map['default'])
                         
+                        # Define names for display logic
                         if p_type == 'TDR':
-                            current_map = {'TDR_Start': '開案', 'TDR_Trans': '轉NPDR時間', 'NPDR': start_col, 'DV': '設計驗證時間', 'EV': '工程驗證時間', 'Order': '預計訂單起始點'}
-                            current_names = {'TDR_Start': 'TDR開案', 'TDR_Trans': '轉NPDR', 'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
+                            names = {'TDR_Start': 'TDR開案', 'TDR_Trans': '轉NPDR', 'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
+                            check_list = {'TDR_Start': ['開案'], 'TDR_Trans': ['轉NPDR時間'], 'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
                         else:
-                            current_map = {'NPDR': start_col, 'DV': '設計驗證時間', 'EV': '工程驗證時間', 'Order': '預計訂單起始點'}
-                            current_names = {'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
+                            names = {'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
+                            check_list = {'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
                         
                         next_stage = None
                         min_days = float('inf')
                         
-                        for sc, coln in current_map.items():
-                            if coln in pm_projects.columns:
-                                val = row[coln]
-                                d = parse_quarter_date_end(val)
-                                if pd.isnull(d): d = pd.to_datetime(val, errors='coerce')
-                                if pd.notnull(d):
-                                    dd = (d - now).days
-                                    if dd >= 0 and dd < min_days:
-                                        min_days = dd
-                                        next_stage = {'name': current_names[sc], 'date': d.strftime('%Y-%m-%d')}
+                        for stage_key, col_list in check_list.items():
+                            dt = get_first_valid_date(row, col_list)
+                            if pd.notnull(dt):
+                                dd = (dt - now).days
+                                if dd >= 0 and dd < min_days:
+                                    min_days = dd
+                                    next_stage = {'name': names.get(stage_key, stage_key), 'date': dt.strftime('%Y-%m-%d')}
                         
                         status_text = f"🔜 {next_stage['name']}<br>{next_stage['date']} (剩 {min_days} 天)" if next_stage else "✅ 階段完成 / 未設定"
                         border_color = '#E74C3C' if next_stage and min_days < 7 else style['border']
@@ -440,7 +451,7 @@ if uploaded_file is not None:
                                     box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
                                     height: 100%;">
                             <div style="font-weight:bold; color:{style['text']}">{p_type}</div>
-                            <div style="font-weight:bold; font-size:1.1em; margin: 4px 0;">{row['專案']}</div>
+                            <div style="font-weight:bold; font-size:1.1em; margin: 4px 0; color: #333333;">{row['專案']}</div>
                             <div style="font-size:0.9em; color:#555">{status_text}</div>
                         </div>
                         """
@@ -450,49 +461,81 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 3] 專案研發全週期路徑圖 (V69.0: Default Collapsed)
+    # [區塊 3] 專案研發全週期路徑圖 (V69.6: Smart Column Detection + Full Timeline)
     # =========================================================================
     current_types = open_type_filter if open_type_filter else ["全部"]
     type_label = ", ".join(current_types)
     
-    # [V69.0 Change] expanded=False
     with st.expander(f"🚀 專案研發全週期路徑圖 (Roadmap) - 類別: [{type_label}]", expanded=False):
-        show_schedules = st.checkbox("👁️ 顯示所有節點時程 (Show All Node Schedules)", value=False)
+        c_opts_1, c_opts_2 = st.columns([1, 1])
+        with c_opts_1:
+            show_schedules = st.checkbox("👁️ 顯示所有節點時程 (Show All Node Schedules)", value=False)
+        with c_opts_2:
+            show_tdr_order = st.checkbox("顯示 TDR 預計訂單節點", value=False)
         
         if not df_chart_source.empty:
             try:
                 plot_data = []
                 df_roadmap = df_chart_source.drop_duplicates(subset=['專案'])
                 
-                all_active_weeks = set()
+                # [V69.6 Fix] Collect all valid dates for continuous timeline
+                all_valid_dates = []
                 current_date = pd.Timestamp.now().normalize()
-                current_week_str = get_week_str(current_date)
-                all_active_weeks.add(current_week_str)
+                all_valid_dates.append(current_date)
 
                 for idx, row in df_roadmap.iterrows():
                     p_type = row.get('開案類別', '')
                     dates = {}
                     
-                    std_keys = {'NPDR': start_col, 'DV': '設計驗證時間', 'EV': '工程驗證時間', 'Order': '預計訂單起始點'}
-                    for key, col in std_keys.items():
-                        if col in df_roadmap.columns:
-                            dt = parse_quarter_date_end(row[col])
-                            if pd.isnull(dt): dt = pd.to_datetime(row[col], errors='coerce')
-                            if pd.notnull(dt):
-                                dates[key] = dt
-                                all_active_weeks.add(get_week_str(dt))
+                    # [V69.6 Fix] Smart Detection for Standard Nodes (Any Type)
+                    # Check NPDR
+                    dt_npdr = get_first_valid_date(row, cols_priority_npdr)
+                    if pd.notnull(dt_npdr):
+                        dates['NPDR'] = dt_npdr
+                        all_valid_dates.append(dt_npdr)
                     
+                    # Check DV
+                    dt_dv = get_first_valid_date(row, cols_priority_dv)
+                    if pd.notnull(dt_dv):
+                        dates['DV'] = dt_dv
+                        all_valid_dates.append(dt_dv)
+
+                    # Check EV
+                    dt_ev = get_first_valid_date(row, cols_priority_ev)
+                    if pd.notnull(dt_ev):
+                        dates['EV'] = dt_ev
+                        all_valid_dates.append(dt_ev)
+
+                    # Check Order
+                    dt_order = get_first_valid_date(row, cols_priority_order)
+                    if pd.notnull(dt_order):
+                        # TDR Order Toggle Check
+                        if not (p_type == 'TDR' and not show_tdr_order):
+                            dates['Order'] = dt_order
+                            all_valid_dates.append(dt_order)
+                    
+                    # Type Specifics
                     if p_type == 'TDR':
                         if '開案' in df_roadmap.columns:
-                            dt_tdr = pd.to_datetime(row['開案'], errors='coerce')
-                            if pd.notnull(dt_tdr):
-                                dates['TDR_Start'] = dt_tdr
-                                all_active_weeks.add(get_week_str(dt_tdr))
+                            dt = parse_quarter_date_end(row['開案'])
+                            if pd.isnull(dt): dt = pd.to_datetime(row['開案'], errors='coerce')
+                            if pd.notnull(dt):
+                                dates['TDR_Start'] = dt
+                                all_valid_dates.append(dt)
                         if '轉NPDR時間' in df_roadmap.columns:
-                            dt_trans = pd.to_datetime(row['轉NPDR時間'], errors='coerce')
-                            if pd.notnull(dt_trans):
-                                dates['TDR_Trans'] = dt_trans
-                                all_active_weeks.add(get_week_str(dt_trans))
+                            dt = parse_quarter_date_end(row['轉NPDR時間'])
+                            if pd.isnull(dt): dt = pd.to_datetime(row['轉NPDR時間'], errors='coerce')
+                            if pd.notnull(dt):
+                                dates['TDR_Trans'] = dt
+                                all_valid_dates.append(dt)
+                    
+                    if p_type == 'MDR':
+                        if '開案' in df_roadmap.columns:
+                            dt = parse_quarter_date_end(row['開案'])
+                            if pd.isnull(dt): dt = pd.to_datetime(row['開案'], errors='coerce')
+                            if pd.notnull(dt):
+                                dates['MDR_Start'] = dt
+                                all_valid_dates.append(dt)
 
                     if dates:
                         sorted_points = sorted(dates.items(), key=lambda x: x[1])
@@ -506,7 +549,27 @@ if uploaded_file is not None:
                         })
 
                 if plot_data:
-                    sorted_weeks = sorted(list(all_active_weeks))
+                    # [V69.6 Fix] Robust Continuous Timeline Generation (Monday Alignment)
+                    if all_valid_dates:
+                        min_date = min(all_valid_dates)
+                        max_date = max(all_valid_dates)
+                        
+                        # Align start to previous Monday
+                        start_cursor = min_date - pd.Timedelta(days=min_date.dayofweek) - pd.Timedelta(weeks=4)
+                        end_cursor = max_date + pd.Timedelta(weeks=8)
+                        
+                        sorted_weeks = []
+                        curr = start_cursor
+                        while curr <= end_cursor:
+                            sorted_weeks.append(get_week_str(curr))
+                            curr += pd.Timedelta(days=7)
+                        
+                        # Deduplicate
+                        seen = set()
+                        sorted_weeks = [x for x in sorted_weeks if not (x in seen or seen.add(x))]
+                    else:
+                        sorted_weeks = [get_week_str(current_date)]
+
                     plot_data.sort(key=lambda x: x['min_week'])
                     
                     fig = go.Figure()
@@ -535,33 +598,63 @@ if uploaded_file is not None:
                                 elif end_node == 'TDR_Trans': color = '#D35400' 
                                 else: color = '#7F8C8D' 
                                 
-                                fig.add_trace(go.Scatter(x=x_path, y=[p['專案']] * len(x_path), mode='lines', line=dict(color=color, width=6), showlegend=False, hoverinfo='skip'))
+                                days_rem = (end_dt - current_date).days
+                                hover_line = f"<b>{p['專案']}</b><br>{start_node} ➔ {end_node}<br>⏳ 距 {end_node} 剩: {days_rem} 天"
+
+                                fig.add_trace(go.Scatter(
+                                    x=x_path, y=[p['專案']] * len(x_path), 
+                                    mode='lines', 
+                                    line=dict(color=color, width=6), 
+                                    showlegend=False, 
+                                    hovertext=hover_line,
+                                    hoverinfo="text"
+                                ))
 
                         node_configs = {
-                            'TDR_Start': {'c': '#D35400', 's': 'triangle-up', 'n': 'TDR 開案', 'size': 12},
-                            'TDR_Trans': {'c': '#E67E22', 's': 'diamond', 'n': '轉 NPDR', 'size': 10},
-                            'NPDR': {'c': '#2E86C1', 's': 'circle', 'n': 'NPDR 開案', 'size': 10},
-                            'DV': {'c': '#F39C12', 's': 'diamond', 'n': '設計驗證', 'size': 10},
-                            'EV': {'c': '#9B59B6', 's': 'square', 'n': '工程驗證', 'size': 10},
-                            'Order': {'c': '#27AE60', 's': 'star', 'n': '預計訂單', 'size': 14}
+                            'MDR_Start': {'c': '#E91E63', 's': 'triangle-up', 'n': 'MDR 開案', 'size': 14},
+                            'TDR_Start': {'c': '#D35400', 's': 'triangle-up', 'n': 'TDR 開案', 'size': 14},
+                            'TDR_Trans': {'c': '#C0392B', 's': 'pentagon', 'n': '轉 NPDR', 'size': 14},
+                            'NPDR': {'c': '#2E86C1', 's': 'circle', 'n': 'NPDR 開案', 'size': 12},
+                            'DV': {'c': '#F39C12', 's': 'diamond', 'n': '設計驗證', 'size': 12},
+                            'EV': {'c': '#9B59B6', 's': 'square', 'n': '工程驗證', 'size': 12},
+                            'Order': {'c': '#27AE60', 's': 'star', 'n': '預計訂單', 'size': 16}
                         }
 
                         for key, config in node_configs.items():
                             if key in p['dates']:
                                 dt = p['dates'][key]
+                                diff = (dt - current_date).days
+                                status = f"再 {diff} 天" if diff > 0 else f"已過 {abs(diff)} 天"
+                                
                                 fig.add_trace(go.Scatter(
                                     x=[get_week_str(dt)], y=[p['專案']], 
                                     mode='markers+text' if show_schedules else 'markers',
-                                    marker=dict(color=config['c'], symbol=config['s'], size=config.get('size', 10), line=dict(width=2, color='white')),
+                                    marker=dict(color=config['c'], symbol=config['s'], size=config.get('size', 12), line=dict(width=2, color='white')),
                                     text=[dt.strftime('%m-%d')] if show_schedules else "", textposition="bottom center",
-                                    hovertext=f"<b>{p['專案']} - {config['n']}</b><br>{dt.strftime('%Y-%m-%d')}", 
+                                    hovertext=f"<b>{config['n']}</b><br>📅 {dt.strftime('%Y-%m-%d')}<br>({status})", 
                                     hoverinfo="text", showlegend=False
                                 ))
 
-                    fig.add_vline(x=current_week_str, line_width=2, line_dash="dash", line_color="#E74C3C")
-                    fig.add_annotation(x=current_week_str, y=1.05, yref='paper', text=f"📍 本週 ({current_week_str})", showarrow=False, font=dict(color="#E74C3C", size=12, weight="bold"), bgcolor="rgba(255, 255, 255, 0.9)", bordercolor="#E74C3C", borderwidth=1)
+                    for key, conf in node_configs.items():
+                        fig.add_trace(go.Scatter(
+                            x=[None], y=[None], mode='markers',
+                            marker=dict(symbol=conf['s'], color=conf['c'], size=10),
+                            name=conf['n'], showlegend=True
+                        ))
 
-                    fig.update_layout(xaxis=dict(title="時間軸 (週次)", type='category', categoryorder='array', categoryarray=sorted_weeks, tickangle=-45), yaxis=dict(title="專案", autorange="reversed"), height=max(400, 150 + (len(plot_data) * 45)), margin=dict(l=0, r=0, t=80, b=20))
+                    current_week_str = get_week_str(current_date)
+                    if current_week_str in sorted_weeks:
+                        fig.add_vline(x=current_week_str, line_width=2, line_dash="dash", line_color="#E74C3C")
+                        fig.add_annotation(x=current_week_str, y=1.05, yref='paper', text=f"📍 本週 ({current_week_str})", showarrow=False, font=dict(color="#E74C3C", size=12, weight="bold"), bgcolor="rgba(255, 255, 255, 0.9)", bordercolor="#E74C3C", borderwidth=1)
+
+                    fig.update_layout(
+                        xaxis=dict(title="時間軸 (週次)", type='category', categoryorder='array', categoryarray=sorted_weeks, tickangle=-45), 
+                        yaxis=dict(title="專案", autorange="reversed"), 
+                        height=max(400, 150 + (len(plot_data) * 45)), 
+                        margin=dict(l=0, r=0, t=80, b=20),
+                        hoverlabel=dict(font_size=16, font_family="Arial"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5)
+                    )
                     st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"路徑圖錯誤: {e}")
