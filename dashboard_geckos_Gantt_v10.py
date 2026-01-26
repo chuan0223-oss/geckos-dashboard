@@ -143,13 +143,11 @@ if uploaded_file is not None:
     
     icon_map = {'NPDR': '🔵', 'DV': '🔶', 'EV': '🟥', 'Order': '🟢'}
     
-    # [V69.6 Fix] Define priority lists for columns instead of single value
     cols_priority_npdr = ['NPDR', 'NPDR時間', 'NPDR開案時間', '開案時間', '开案时间']
     cols_priority_dv = ['設計驗證時間', 'DV', 'DV時間', '設計驗證']
     cols_priority_ev = ['工程驗證時間', 'EV', 'EV時間', '工程驗證']
     cols_priority_order = ['預計訂單起始點', 'Order', '預計訂單']
     
-    # Helper to find first valid date from a list of columns for a row
     def get_first_valid_date(row, cols_list):
         for c in cols_list:
             if c in row.index:
@@ -159,7 +157,6 @@ if uploaded_file is not None:
                 if pd.notnull(dt): return dt
         return pd.NaT
 
-    # Determine start_col just for reference/Block 8 (use the first available one)
     start_col = '開案時間'
     for c in cols_priority_npdr:
         if c in df_full.columns:
@@ -344,10 +341,8 @@ if uploaded_file is not None:
             pm_name = row.get('專案負責人', '')
             pm_str = f"(PM: {pm_name})" if pd.notnull(pm_name) else ""
             
-            # [V69.6] Enhanced Alert Logic using Priority Columns
             check_cols = {'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
             
-            # Type specific adjustments for alerts
             if p_type == 'TDR':
                 if '開案' in df_alerts.columns: check_cols['TDR開案'] = ['開案']
                 if '轉NPDR時間' in df_alerts.columns: check_cols['轉NPDR'] = ['轉NPDR時間']
@@ -422,24 +417,26 @@ if uploaded_file is not None:
                         p_type = row.get('開案類別', 'default')
                         style = type_style_map.get(p_type, type_style_map['default'])
                         
-                        # Define names for display logic
                         if p_type == 'TDR':
-                            names = {'TDR_Start': 'TDR開案', 'TDR_Trans': '轉NPDR', 'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
-                            check_list = {'TDR_Start': ['開案'], 'TDR_Trans': ['轉NPDR時間'], 'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
+                            names_map = {'TDR_Start': 'TDR開案', 'TDR_Trans': '轉NPDR', 'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
+                            check_dict = {'TDR_Start': ['開案'], 'TDR_Trans': ['轉NPDR時間'], 'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
+                        elif p_type == 'MDR':
+                            names_map = {'MDR_Start': 'MDR開案', 'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
+                            check_dict = {'MDR_Start': ['開案'], 'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
                         else:
-                            names = {'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
-                            check_list = {'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
+                            names_map = {'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
+                            check_dict = {'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
                         
                         next_stage = None
                         min_days = float('inf')
                         
-                        for stage_key, col_list in check_list.items():
-                            dt = get_first_valid_date(row, col_list)
-                            if pd.notnull(dt):
-                                dd = (dt - now).days
+                        for stage_key, col_list in check_dict.items():
+                            d = get_first_valid_date(row, col_list)
+                            if pd.notnull(d):
+                                dd = (d - now).days
                                 if dd >= 0 and dd < min_days:
                                     min_days = dd
-                                    next_stage = {'name': names.get(stage_key, stage_key), 'date': dt.strftime('%Y-%m-%d')}
+                                    next_stage = {'name': names_map.get(stage_key, stage_key), 'date': d.strftime('%Y-%m-%d')}
                         
                         status_text = f"🔜 {next_stage['name']}<br>{next_stage['date']} (剩 {min_days} 天)" if next_stage else "✅ 階段完成 / 未設定"
                         border_color = '#E74C3C' if next_stage and min_days < 7 else style['border']
@@ -461,12 +458,13 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 3] 專案研發全週期路徑圖 (V69.6: Smart Column Detection + Full Timeline)
+    # [區塊 3] 專案研發全週期路徑圖 (V70.0: Default Expanded)
     # =========================================================================
     current_types = open_type_filter if open_type_filter else ["全部"]
     type_label = ", ".join(current_types)
     
-    with st.expander(f"🚀 專案研發全週期路徑圖 (Roadmap) - 類別: [{type_label}]", expanded=False):
+    # [V70.0] Changed expanded=True
+    with st.expander(f"🚀 專案研發全週期路徑圖 (Roadmap) - 類別: [{type_label}]", expanded=True):
         c_opts_1, c_opts_2 = st.columns([1, 1])
         with c_opts_1:
             show_schedules = st.checkbox("👁️ 顯示所有節點時程 (Show All Node Schedules)", value=False)
@@ -478,7 +476,6 @@ if uploaded_file is not None:
                 plot_data = []
                 df_roadmap = df_chart_source.drop_duplicates(subset=['專案'])
                 
-                # [V69.6 Fix] Collect all valid dates for continuous timeline
                 all_valid_dates = []
                 current_date = pd.Timestamp.now().normalize()
                 all_valid_dates.append(current_date)
@@ -487,34 +484,27 @@ if uploaded_file is not None:
                     p_type = row.get('開案類別', '')
                     dates = {}
                     
-                    # [V69.6 Fix] Smart Detection for Standard Nodes (Any Type)
-                    # Check NPDR
                     dt_npdr = get_first_valid_date(row, cols_priority_npdr)
                     if pd.notnull(dt_npdr):
                         dates['NPDR'] = dt_npdr
                         all_valid_dates.append(dt_npdr)
                     
-                    # Check DV
                     dt_dv = get_first_valid_date(row, cols_priority_dv)
                     if pd.notnull(dt_dv):
                         dates['DV'] = dt_dv
                         all_valid_dates.append(dt_dv)
 
-                    # Check EV
                     dt_ev = get_first_valid_date(row, cols_priority_ev)
                     if pd.notnull(dt_ev):
                         dates['EV'] = dt_ev
                         all_valid_dates.append(dt_ev)
 
-                    # Check Order
                     dt_order = get_first_valid_date(row, cols_priority_order)
                     if pd.notnull(dt_order):
-                        # TDR Order Toggle Check
                         if not (p_type == 'TDR' and not show_tdr_order):
                             dates['Order'] = dt_order
                             all_valid_dates.append(dt_order)
                     
-                    # Type Specifics
                     if p_type == 'TDR':
                         if '開案' in df_roadmap.columns:
                             dt = parse_quarter_date_end(row['開案'])
@@ -549,12 +539,9 @@ if uploaded_file is not None:
                         })
 
                 if plot_data:
-                    # [V69.6 Fix] Robust Continuous Timeline Generation (Monday Alignment)
                     if all_valid_dates:
                         min_date = min(all_valid_dates)
                         max_date = max(all_valid_dates)
-                        
-                        # Align start to previous Monday
                         start_cursor = min_date - pd.Timedelta(days=min_date.dayofweek) - pd.Timedelta(weeks=4)
                         end_cursor = max_date + pd.Timedelta(weeks=8)
                         
@@ -564,7 +551,6 @@ if uploaded_file is not None:
                             sorted_weeks.append(get_week_str(curr))
                             curr += pd.Timedelta(days=7)
                         
-                        # Deduplicate
                         seen = set()
                         sorted_weeks = [x for x in sorted_weeks if not (x in seen or seen.add(x))]
                     else:
@@ -662,7 +648,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 6] 營收 Top 10 專案 (含 PM 篩選)
+    # [區塊 6] 營收 Top 10 專案 (含 PM 篩選) (V70.0: Smart Contrast Text)
     # =========================================================================
     with st.expander("🏆 營收 Top 10 專案 (含 PM 篩選)", expanded=True):
         if total_revenue_twd > 0:
@@ -670,16 +656,57 @@ if uploaded_file is not None:
             with b6_col_sel:
                 pm_sel_b6 = st.selectbox("👤 篩選負責人 (由此查看個別營收)", ["全部 (All)"] + list(unique_pms))
             
-            if pm_sel_b6 == "全部 (All)": df_b6 = df_chart_source.copy()
-            else: df_b6 = df_chart_source[df_chart_source['專案負責人_display'] == pm_sel_b6]
+            if pm_sel_b6 == "全部 (All)": 
+                df_b6 = df_chart_source.copy()
+            else: 
+                df_b6 = df_chart_source[df_chart_source['專案負責人_display'] == pm_sel_b6]
             
             local_rev = df_b6['Calculated_Total_TWD'].sum()
-            with b6_col_metric: st.metric(label=f"💰 預估總營收 (TWD) - {pm_sel_b6}", value=f"{local_rev:,.0f}")
+            with b6_col_metric: 
+                st.metric(label=f"💰 預估總營收 (TWD) - {pm_sel_b6}", value=f"{local_rev:,.0f}")
 
             if not df_b6.empty:
                 df_chart = df_b6.groupby('專案')['Calculated_Total_TWD'].sum().reset_index()
                 df_chart = df_chart.nlargest(10, 'Calculated_Total_TWD').sort_values('Calculated_Total_TWD', ascending=True)
-                fig_bar = px.bar(df_chart, x='Calculated_Total_TWD', y='專案', orientation='h', text_auto=',.0f', color='Calculated_Total_TWD', color_continuous_scale='Blues')
+                
+                if local_rev > 0:
+                    df_chart['Pct'] = (df_chart['Calculated_Total_TWD'] / local_rev) * 100
+                else:
+                    df_chart['Pct'] = 0
+                
+                # [V70.0] Smart Text Color Logic
+                # Logic: If value is small (light bar) -> Dark Text. Large (dark bar) -> White Text.
+                # Threshold: relative to max value in current set.
+                max_val = df_chart['Calculated_Total_TWD'].max() if not df_chart.empty else 1
+                
+                def get_smart_color(val):
+                    # Using a threshold of 40% of max value. Below 40% (lighter blue) -> Dark Text.
+                    return '#333333' if val < (max_val * 0.4) else '#FFFFFF'
+
+                df_chart['Text_Color'] = df_chart['Calculated_Total_TWD'].apply(get_smart_color)
+
+                fig_bar = px.bar(
+                    df_chart, 
+                    x='Calculated_Total_TWD', 
+                    y='專案', 
+                    orientation='h', 
+                    text_auto=',.0f', 
+                    color='Calculated_Total_TWD', 
+                    color_continuous_scale='Blues'
+                )
+                
+                # Use dynamic color list
+                fig_bar.add_trace(go.Scatter(
+                    x=[0] * len(df_chart),
+                    y=df_chart['專案'],
+                    text=df_chart['Pct'].apply(lambda x: f"<b>{x:.1f}%</b>"),
+                    mode='text',
+                    textposition='middle right',
+                    textfont=dict(size=14, color=df_chart['Text_Color']), # Applied Smart Color
+                    hoverinfo='skip',
+                    showlegend=False
+                ))
+
                 fig_bar.update_layout(xaxis_title="預估營收 (含RMB換算)", yaxis_title="專案")
                 st.plotly_chart(fig_bar, use_container_width=True)
             else: st.warning("此負責人無營收資料")
