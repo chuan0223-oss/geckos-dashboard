@@ -74,6 +74,17 @@ def get_week_str(dt):
     iso_cal = dt.isocalendar()
     return f"{iso_cal.year}-W{iso_cal.week:02d}"
 
+# Helper to parse margin ranges
+def parse_margin_min(val):
+    if pd.isna(val) or str(val).strip() == '': return 0.0
+    val_str = str(val).replace('%', '')
+    nums = re.findall(r"[-+]?\d*\.\d+|\d+", val_str)
+    if not nums: return 0.0
+    floats = [float(n) for n in nums]
+    min_val = min(floats)
+    if min_val > 1.0: return min_val / 100.0
+    return min_val
+
 if uploaded_file is not None:
     # 2. 讀取與初始化資料
     try:
@@ -114,6 +125,7 @@ if uploaded_file is not None:
     # --- 欄位識別 ---
     col_twd = None
     col_rmb = None
+    col_margin = None
     
     candidates_twd = [c for c in df_full.columns if '營收' in c and 'TWD' in c]
     if candidates_twd: col_twd = candidates_twd[0]
@@ -124,6 +136,12 @@ if uploaded_file is not None:
     if not col_twd:
         candidates_gen = [c for c in df_full.columns if '營收' in c and c != col_rmb]
         if candidates_gen: col_twd = candidates_gen[0]
+
+    margin_candidates = ['預估毛利率', '毛利率', '預期毛利率', 'Gross Margin', 'GM']
+    for c in margin_candidates:
+        if c in df_full.columns:
+            col_margin = c
+            break
 
     if not col_twd:
         st.error("❌ 找不到「預估營收(TWD)」相關欄位，請檢查 Excel 表頭。")
@@ -254,7 +272,15 @@ if uploaded_file is not None:
     val_rmb = df_chart_source[col_rmb].fillna(0) if col_rmb else 0
     df_chart_source['Calculated_Total_TWD'] = val_twd + (val_rmb * rmb_rate)
     
+    if col_margin:
+        df_chart_source['Parsed_Margin_Rate'] = df_chart_source[col_margin].apply(parse_margin_min)
+        df_chart_source['Calculated_Gross_Profit'] = df_chart_source['Calculated_Total_TWD'] * df_chart_source['Parsed_Margin_Rate']
+    else:
+        df_chart_source['Parsed_Margin_Rate'] = 0.0
+        df_chart_source['Calculated_Gross_Profit'] = 0.0
+
     total_revenue_twd = df_chart_source['Calculated_Total_TWD'].sum()
+    total_profit_twd = df_chart_source['Calculated_Gross_Profit'].sum()
     project_count_unique = df_chart_source['專案'].nunique()
 
     # =========================================================================
@@ -271,15 +297,18 @@ if uploaded_file is not None:
         top_contributor_text = "無資料"
         top_project_rev = 0
 
-    col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
     
     with col_kpi1:
-        st.metric(label=f"💰 預估總營收 (TWD) - 匯率 {rmb_rate}", value=f"{total_revenue_twd:,.0f}")
+        st.metric(label=f"💰 預估總營收 (TWD)", value=f"{total_revenue_twd:,.0f}", help=f"匯率換算: RMB * {rmb_rate}")
 
     with col_kpi2:
-        st.metric(label="👑 營收貢獻王 (含RMB)", value=top_contributor_text, delta=f"TWD {top_project_rev:,.0f}")
+        st.metric(label="💎 預估總毛利 (TWD)", value=f"{total_profit_twd:,.0f}", help="計算方式：營收 * 預估毛利率 (若為區間取最低值)")
 
     with col_kpi3:
+        st.metric(label="👑 營收貢獻王 (含RMB)", value=top_contributor_text, delta=f"TWD {top_project_rev:,.0f}")
+
+    with col_kpi4:
         if not df_chart_source.empty:
             df_unique_proj = df_chart_source.drop_duplicates(subset=['專案'])
             if '開案類別' in df_unique_proj.columns:
@@ -306,15 +335,8 @@ if uploaded_file is not None:
                     hoverinfo='skip', showlegend=False, textinfo='none'
                 ))
                 fig_donut.update_layout(
-                    annotations=[dict(
-                        text=str(project_count_unique), 
-                        x=0.5, y=0.5, 
-                        font=dict(size=50, color='white', weight='bold'),
-                        showarrow=False
-                    )],
-                    margin=dict(t=0, b=0, l=10, r=10), 
-                    height=200, 
-                    showlegend=False
+                    annotations=[dict(text=str(project_count_unique), x=0.5, y=0.5, font=dict(size=50, color='white', weight='bold'), showarrow=False)],
+                    margin=dict(t=0, b=0, l=10, r=10), height=200, showlegend=False
                 )
                 st.plotly_chart(fig_donut, use_container_width=True)
             else:
@@ -351,20 +373,16 @@ if uploaded_file is not None:
 
             for key, col_list in check_cols.items():
                 dt = get_first_valid_date(row, col_list)
-                
                 if pd.notnull(dt):
                     days_diff = (dt - now).days
-                    
                     if last_week_start <= dt <= last_week_end:
                         last_week_items.append({'dt': dt, 'html': f"<div style='background:{past_style['bg']};border-left:5px solid {past_style['border']};padding:8px;margin:6px;border-radius:4px'><div style='font-size:0.8em;font-weight:bold;color:{past_style['text']}'>{p_type} (已完成)</div><div style='color:{past_style['text']};font-size:0.9em'><b>{row['專案']}</b> {pm_str}<br>{key} | {dt.strftime('%m-%d')}</div></div>"})
-                    
                     if start_week_date <= dt <= end_week_date:
                         status = "(已過)" if days_diff < 0 else ("(今天)" if days_diff==0 else f"(剩 {days_diff} 天)")
                         bg = style['bg'] if days_diff >= 0 else past_style['bg']
                         border = style['border'] if days_diff >= 0 else past_style['border']
                         txt = style['text'] if days_diff >= 0 else past_style['text']
                         this_week_items.append({'dt': dt, 'html': f"<div style='background:{bg};border-left:5px solid {border};padding:8px;margin:6px;border-radius:4px'><div style='font-size:0.8em;font-weight:bold;color:{txt}'>{p_type}</div><div style='color:#333;font-size:0.9em'><b>{row['專案']}</b> {pm_str}<br>{key} | {dt.strftime('%m-%d')} {status}</div></div>"})
-                    
                     if dt.year == now.year and dt.month == now.month:
                         month_items.append({'dt': dt, 'days_diff': days_diff, 'p_type': p_type, 'pm': pm_str, 'key': key, 'proj': row['專案'], 'style': style})
 
@@ -384,7 +402,6 @@ if uploaded_file is not None:
                 ch1, ch2 = st.columns([2, 1])
                 with ch1: st.markdown("#### 🗓️ 本月重點")
                 with ch2: show_past = st.checkbox("顯示已過期", value=False)
-                
                 if month_items:
                     sorted_month = sorted(month_items, key=lambda x:x['dt'])
                     cnt = 0
@@ -405,9 +422,7 @@ if uploaded_file is not None:
     if not df_chart_source.empty:
         st.divider()
         st.subheader("👥 專案負責人工作儀表板")
-        
         now = pd.Timestamp.now().normalize()
-        
         for pm in unique_pms:
             pm_projects = df_chart_source[df_chart_source['專案負責人_display'] == pm].drop_duplicates(subset=['專案'])
             if not pm_projects.empty:
@@ -416,7 +431,6 @@ if uploaded_file is not None:
                     for i, (idx, row) in enumerate(pm_projects.iterrows()):
                         p_type = row.get('開案類別', 'default')
                         style = type_style_map.get(p_type, type_style_map['default'])
-                        
                         if p_type == 'TDR':
                             names_map = {'TDR_Start': 'TDR開案', 'TDR_Trans': '轉NPDR', 'NPDR': 'NPDR開案', 'DV': 'DV', 'EV': 'EV', 'Order': 'Order'}
                             check_dict = {'TDR_Start': ['開案'], 'TDR_Trans': ['轉NPDR時間'], 'NPDR': cols_priority_npdr, 'DV': cols_priority_dv, 'EV': cols_priority_ev, 'Order': cols_priority_order}
@@ -429,7 +443,6 @@ if uploaded_file is not None:
                         
                         next_stage = None
                         min_days = float('inf')
-                        
                         for stage_key, col_list in check_dict.items():
                             d = get_first_valid_date(row, col_list)
                             if pd.notnull(d):
@@ -440,13 +453,8 @@ if uploaded_file is not None:
                         
                         status_text = f"🔜 {next_stage['name']}<br>{next_stage['date']} (剩 {min_days} 天)" if next_stage else "✅ 階段完成 / 未設定"
                         border_color = '#E74C3C' if next_stage and min_days < 7 else style['border']
-                        
                         html = f"""
-                        <div style="background-color: {style['bg']}; 
-                                    border-top: 5px solid {border_color}; 
-                                    padding: 10px; margin: 5px; 
-                                    box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
-                                    height: 100%;">
+                        <div style="background-color: {style['bg']}; border-top: 5px solid {border_color}; padding: 10px; margin: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); height: 100%;">
                             <div style="font-weight:bold; color:{style['text']}">{p_type}</div>
                             <div style="font-weight:bold; font-size:1.1em; margin: 4px 0; color: #333333;">{row['專案']}</div>
                             <div style="font-size:0.9em; color:#555">{status_text}</div>
@@ -458,12 +466,10 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 3] 專案研發全週期路徑圖 (V70.0: Default Expanded)
+    # [區塊 3] 專案研發全週期路徑圖
     # =========================================================================
     current_types = open_type_filter if open_type_filter else ["全部"]
     type_label = ", ".join(current_types)
-    
-    # [V70.0] Changed expanded=True
     with st.expander(f"🚀 專案研發全週期路徑圖 (Roadmap) - 類別: [{type_label}]", expanded=True):
         c_opts_1, c_opts_2 = st.columns([1, 1])
         with c_opts_1:
@@ -475,10 +481,7 @@ if uploaded_file is not None:
             try:
                 plot_data = []
                 df_roadmap = df_chart_source.drop_duplicates(subset=['專案'])
-                
-                all_valid_dates = []
-                current_date = pd.Timestamp.now().normalize()
-                all_valid_dates.append(current_date)
+                all_valid_dates = [pd.Timestamp.now().normalize()]
 
                 for idx, row in df_roadmap.iterrows():
                     p_type = row.get('開案類別', '')
@@ -531,11 +534,7 @@ if uploaded_file is not None:
                         sorted_points = sorted(dates.items(), key=lambda x: x[1])
                         min_week = get_week_str(sorted_points[0][1])
                         plot_data.append({
-                            '專案': row['專案'], 
-                            'dates': dates, 
-                            'sorted_points': sorted_points, 
-                            'min_week': min_week,
-                            'has_data': True
+                            '專案': row['專案'], 'dates': dates, 'sorted_points': sorted_points, 'min_week': min_week, 'has_data': True
                         })
 
                 if plot_data:
@@ -544,20 +543,16 @@ if uploaded_file is not None:
                         max_date = max(all_valid_dates)
                         start_cursor = min_date - pd.Timedelta(days=min_date.dayofweek) - pd.Timedelta(weeks=4)
                         end_cursor = max_date + pd.Timedelta(weeks=8)
-                        
                         sorted_weeks = []
                         curr = start_cursor
                         while curr <= end_cursor:
                             sorted_weeks.append(get_week_str(curr))
                             curr += pd.Timedelta(days=7)
-                        
-                        seen = set()
-                        sorted_weeks = [x for x in sorted_weeks if not (x in seen or seen.add(x))]
+                        seen = set(); sorted_weeks = [x for x in sorted_weeks if not (x in seen or seen.add(x))]
                     else:
-                        sorted_weeks = [get_week_str(current_date)]
+                        sorted_weeks = [get_week_str(pd.Timestamp.now().normalize())]
 
                     plot_data.sort(key=lambda x: x['min_week'])
-                    
                     fig = go.Figure()
 
                     for p in plot_data:
@@ -567,10 +562,8 @@ if uploaded_file is not None:
                                 end_dt = p['sorted_points'][i+1][1]
                                 start_node = p['sorted_points'][i][0]
                                 end_node = p['sorted_points'][i+1][0]
-                                
                                 s_week = get_week_str(start_dt)
                                 e_week = get_week_str(end_dt)
-                                
                                 try:
                                     s_idx = sorted_weeks.index(s_week)
                                     e_idx = sorted_weeks.index(e_week)
@@ -583,18 +576,9 @@ if uploaded_file is not None:
                                 elif end_node == 'NPDR': color = '#2980B9' 
                                 elif end_node == 'TDR_Trans': color = '#D35400' 
                                 else: color = '#7F8C8D' 
-                                
-                                days_rem = (end_dt - current_date).days
+                                days_rem = (end_dt - pd.Timestamp.now().normalize()).days
                                 hover_line = f"<b>{p['專案']}</b><br>{start_node} ➔ {end_node}<br>⏳ 距 {end_node} 剩: {days_rem} 天"
-
-                                fig.add_trace(go.Scatter(
-                                    x=x_path, y=[p['專案']] * len(x_path), 
-                                    mode='lines', 
-                                    line=dict(color=color, width=6), 
-                                    showlegend=False, 
-                                    hovertext=hover_line,
-                                    hoverinfo="text"
-                                ))
+                                fig.add_trace(go.Scatter(x=x_path, y=[p['專案']] * len(x_path), mode='lines', line=dict(color=color, width=6), showlegend=False, hovertext=hover_line, hoverinfo="text"))
 
                         node_configs = {
                             'MDR_Start': {'c': '#E91E63', 's': 'triangle-up', 'n': 'MDR 開案', 'size': 14},
@@ -605,42 +589,22 @@ if uploaded_file is not None:
                             'EV': {'c': '#9B59B6', 's': 'square', 'n': '工程驗證', 'size': 12},
                             'Order': {'c': '#27AE60', 's': 'star', 'n': '預計訂單', 'size': 16}
                         }
-
                         for key, config in node_configs.items():
                             if key in p['dates']:
                                 dt = p['dates'][key]
-                                diff = (dt - current_date).days
+                                diff = (dt - pd.Timestamp.now().normalize()).days
                                 status = f"再 {diff} 天" if diff > 0 else f"已過 {abs(diff)} 天"
-                                
-                                fig.add_trace(go.Scatter(
-                                    x=[get_week_str(dt)], y=[p['專案']], 
-                                    mode='markers+text' if show_schedules else 'markers',
-                                    marker=dict(color=config['c'], symbol=config['s'], size=config.get('size', 12), line=dict(width=2, color='white')),
-                                    text=[dt.strftime('%m-%d')] if show_schedules else "", textposition="bottom center",
-                                    hovertext=f"<b>{config['n']}</b><br>📅 {dt.strftime('%Y-%m-%d')}<br>({status})", 
-                                    hoverinfo="text", showlegend=False
-                                ))
+                                fig.add_trace(go.Scatter(x=[get_week_str(dt)], y=[p['專案']], mode='markers+text' if show_schedules else 'markers', marker=dict(color=config['c'], symbol=config['s'], size=config.get('size', 12), line=dict(width=2, color='white')), text=[dt.strftime('%m-%d')] if show_schedules else "", textposition="bottom center", hovertext=f"<b>{config['n']}</b><br>📅 {dt.strftime('%Y-%m-%d')}<br>({status})", hoverinfo="text", showlegend=False))
 
                     for key, conf in node_configs.items():
-                        fig.add_trace(go.Scatter(
-                            x=[None], y=[None], mode='markers',
-                            marker=dict(symbol=conf['s'], color=conf['c'], size=10),
-                            name=conf['n'], showlegend=True
-                        ))
+                        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(symbol=conf['s'], color=conf['c'], size=10), name=conf['n'], showlegend=True))
 
-                    current_week_str = get_week_str(current_date)
+                    current_week_str = get_week_str(pd.Timestamp.now().normalize())
                     if current_week_str in sorted_weeks:
                         fig.add_vline(x=current_week_str, line_width=2, line_dash="dash", line_color="#E74C3C")
                         fig.add_annotation(x=current_week_str, y=1.05, yref='paper', text=f"📍 本週 ({current_week_str})", showarrow=False, font=dict(color="#E74C3C", size=12, weight="bold"), bgcolor="rgba(255, 255, 255, 0.9)", bordercolor="#E74C3C", borderwidth=1)
 
-                    fig.update_layout(
-                        xaxis=dict(title="時間軸 (週次)", type='category', categoryorder='array', categoryarray=sorted_weeks, tickangle=-45), 
-                        yaxis=dict(title="專案", autorange="reversed"), 
-                        height=max(400, 150 + (len(plot_data) * 45)), 
-                        margin=dict(l=0, r=0, t=80, b=20),
-                        hoverlabel=dict(font_size=16, font_family="Arial"),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5)
-                    )
+                    fig.update_layout(xaxis=dict(title="時間軸 (週次)", type='category', categoryorder='array', categoryarray=sorted_weeks, tickangle=-45), yaxis=dict(title="專案", autorange="reversed"), height=max(400, 150 + (len(plot_data) * 45)), margin=dict(l=0, r=0, t=80, b=20), hoverlabel=dict(font_size=16, font_family="Arial"), legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5))
                     st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"路徑圖錯誤: {e}")
@@ -648,7 +612,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 6] 營收 Top 10 專案 (含 PM 篩選) (V70.0: Smart Contrast Text)
+    # [區塊 6] 營收 Top 10 (V71.4: Enhanced Visuals)
     # =========================================================================
     with st.expander("🏆 營收 Top 10 專案 (含 PM 篩選)", expanded=True):
         if total_revenue_twd > 0:
@@ -656,61 +620,107 @@ if uploaded_file is not None:
             with b6_col_sel:
                 pm_sel_b6 = st.selectbox("👤 篩選負責人 (由此查看個別營收)", ["全部 (All)"] + list(unique_pms))
             
-            if pm_sel_b6 == "全部 (All)": 
-                df_b6 = df_chart_source.copy()
-            else: 
-                df_b6 = df_chart_source[df_chart_source['專案負責人_display'] == pm_sel_b6]
+            if pm_sel_b6 == "全部 (All)": df_b6 = df_chart_source.copy()
+            else: df_b6 = df_chart_source[df_chart_source['專案負責人_display'] == pm_sel_b6]
             
             local_rev = df_b6['Calculated_Total_TWD'].sum()
-            with b6_col_metric: 
-                st.metric(label=f"💰 預估總營收 (TWD) - {pm_sel_b6}", value=f"{local_rev:,.0f}")
+            with b6_col_metric: st.metric(label=f"💰 預估總營收 (TWD) - {pm_sel_b6}", value=f"{local_rev:,.0f}")
 
             if not df_b6.empty:
                 df_chart = df_b6.groupby('專案')['Calculated_Total_TWD'].sum().reset_index()
                 df_chart = df_chart.nlargest(10, 'Calculated_Total_TWD').sort_values('Calculated_Total_TWD', ascending=True)
                 
-                if local_rev > 0:
-                    df_chart['Pct'] = (df_chart['Calculated_Total_TWD'] / local_rev) * 100
-                else:
-                    df_chart['Pct'] = 0
+                if total_revenue_twd > 0: df_chart['Pct'] = (df_chart['Calculated_Total_TWD'] / total_revenue_twd) * 100
+                else: df_chart['Pct'] = 0
                 
-                # [V70.0] Smart Text Color Logic
-                # Logic: If value is small (light bar) -> Dark Text. Large (dark bar) -> White Text.
-                # Threshold: relative to max value in current set.
                 max_val = df_chart['Calculated_Total_TWD'].max() if not df_chart.empty else 1
+                threshold = max_val * 0.15 
                 
-                def get_smart_color(val):
-                    # Using a threshold of 40% of max value. Below 40% (lighter blue) -> Dark Text.
-                    return '#333333' if val < (max_val * 0.4) else '#FFFFFF'
+                def get_smart_color(val): return '#333333' if val < (max_val * 0.4) else '#FFFFFF'
+                df_chart['Inside_Color'] = df_chart['Calculated_Total_TWD'].apply(get_smart_color)
 
-                df_chart['Text_Color'] = df_chart['Calculated_Total_TWD'].apply(get_smart_color)
+                # [V71.4] Enhanced Dynamic Text (Bold, Consistent Size)
+                def get_bar_text(row):
+                    val_str = f"{row['Calculated_Total_TWD']:,.0f}"
+                    # Add Bold tag for outside percentage too
+                    pct_str = f"<b>{row['Pct']:.1f}%</b>"
+                    if row['Calculated_Total_TWD'] < threshold:
+                        return f"{pct_str} | {val_str}"
+                    return val_str
 
-                fig_bar = px.bar(
-                    df_chart, 
-                    x='Calculated_Total_TWD', 
-                    y='專案', 
-                    orientation='h', 
-                    text_auto=',.0f', 
-                    color='Calculated_Total_TWD', 
-                    color_continuous_scale='Blues'
-                )
+                def get_scatter_text(row):
+                    if row['Calculated_Total_TWD'] < threshold:
+                        return ""
+                    return f"<b>{row['Pct']:.1f}%</b>"
+
+                df_chart['Bar_Text'] = df_chart.apply(get_bar_text, axis=1)
+                df_chart['Scatter_Text'] = df_chart.apply(get_scatter_text, axis=1)
+
+                fig_bar = px.bar(df_chart, x='Calculated_Total_TWD', y='專案', orientation='h', color='Calculated_Total_TWD', color_continuous_scale='Blues')
                 
-                # Use dynamic color list
+                # [V71.4] Set size 14 and dark color for outside text
+                fig_bar.update_traces(text=df_chart['Bar_Text'], texttemplate='%{text}', textposition='outside', textfont=dict(size=14, color='#333333'))
+                
                 fig_bar.add_trace(go.Scatter(
                     x=[0] * len(df_chart),
                     y=df_chart['專案'],
-                    text=df_chart['Pct'].apply(lambda x: f"<b>{x:.1f}%</b>"),
+                    text=df_chart['Scatter_Text'],
                     mode='text',
                     textposition='middle right',
-                    textfont=dict(size=14, color=df_chart['Text_Color']), # Applied Smart Color
+                    textfont=dict(size=14, color=df_chart['Inside_Color']),
                     hoverinfo='skip',
                     showlegend=False
                 ))
 
-                fig_bar.update_layout(xaxis_title="預估營收 (含RMB換算)", yaxis_title="專案")
+                fig_bar.update_layout(xaxis_title="預估營收 (含RMB換算)", yaxis_title="專案", xaxis=dict(range=[0, max_val * 1.35]))
                 st.plotly_chart(fig_bar, use_container_width=True)
             else: st.warning("此負責人無營收資料")
         else: st.info("無營收數據")
+
+    # =========================================================================
+    # [區塊 11] 預估毛利 Top 10 (V71.4: Enhanced Visuals)
+    # =========================================================================
+    with st.expander("💎 預估毛利 Top 10 專案 (含 PM 篩選)", expanded=True):
+        if 'df_b6' in locals() and not df_b6.empty:
+            df_gp_chart = df_b6.groupby('專案')['Calculated_Gross_Profit'].sum().reset_index()
+            df_gp_chart = df_gp_chart.nlargest(10, 'Calculated_Gross_Profit').sort_values('Calculated_Gross_Profit', ascending=True)
+            
+            max_gp = df_gp_chart['Calculated_Gross_Profit'].max() if not df_gp_chart.empty else 1
+            threshold_gp = max_gp * 0.15 
+            
+            def get_smart_color_gp(val): return '#333333' if val < (max_gp * 0.4) else '#FFFFFF'
+            df_gp_chart['Inside_Color'] = df_gp_chart['Calculated_Gross_Profit'].apply(get_smart_color_gp)
+
+            df_rev_for_margin = df_b6.groupby('專案')['Calculated_Total_TWD'].sum().reset_index()
+            df_gp_chart = pd.merge(df_gp_chart, df_rev_for_margin, on='專案')
+            df_gp_chart['Avg_Margin'] = (df_gp_chart['Calculated_Gross_Profit'] / df_gp_chart['Calculated_Total_TWD']) * 100
+            
+            # [V71.4] Enhanced Logic with (毛利率)
+            def get_gp_bar_text(row):
+                val_str = f"{row['Calculated_Gross_Profit']:,.0f}"
+                margin_str = f"<b>{row['Avg_Margin']:.1f}%</b> (毛利率)"
+                if row['Calculated_Gross_Profit'] < threshold_gp:
+                    return f"{margin_str} | {val_str}"
+                return val_str
+
+            def get_gp_scatter_text(row):
+                if row['Calculated_Gross_Profit'] < threshold_gp:
+                    return ""
+                return f"<b>{row['Avg_Margin']:.1f}%</b> (毛利率)"
+
+            df_gp_chart['Bar_Text'] = df_gp_chart.apply(get_gp_bar_text, axis=1)
+            df_gp_chart['Scatter_Text'] = df_gp_chart.apply(get_gp_scatter_text, axis=1)
+
+            fig_gp = px.bar(df_gp_chart, x='Calculated_Gross_Profit', y='專案', orientation='h', color='Calculated_Gross_Profit', color_continuous_scale='Greens')
+            
+            # [V71.4] Consistent Styling
+            fig_gp.update_traces(text=df_gp_chart['Bar_Text'], texttemplate='%{text}', textposition='outside', textfont=dict(size=14, color='#333333'))
+            
+            fig_gp.add_trace(go.Scatter(x=[0] * len(df_gp_chart), y=df_gp_chart['專案'], text=df_gp_chart['Scatter_Text'], mode='text', textposition='middle right', textfont=dict(size=14, color=df_gp_chart['Inside_Color']), hoverinfo='skip', showlegend=False))
+
+            fig_gp.update_layout(xaxis_title="預估毛利 (TWD)", yaxis_title="專案", xaxis=dict(range=[0, max_gp * 1.35]))
+            st.plotly_chart(fig_gp, use_container_width=True)
+        else: st.info("無毛利數據")
 
     st.divider()
 
@@ -827,7 +837,7 @@ if uploaded_file is not None:
     st.subheader("📋 詳細資料檢視 (可編輯模式)")
     st.info("💡 提示：您可直接在表格修改，或勾選左側「📝 編輯」開啟詳細編輯視窗。欲刪除資料請勾選「🗑️ 刪除」。")
 
-    display_df = df_chart_source.drop(columns=['Calculated_Total_TWD'], errors='ignore').copy()
+    display_df = df_chart_source.drop(columns=['Calculated_Total_TWD', 'Parsed_Margin_Rate', 'Calculated_Gross_Profit'], errors='ignore').copy()
     if "🗑️ 刪除" in display_df.columns: display_df.drop(columns=["🗑️ 刪除"], inplace=True)
     if "📝 編輯" in display_df.columns: display_df.drop(columns=["📝 編輯"], inplace=True)
     
