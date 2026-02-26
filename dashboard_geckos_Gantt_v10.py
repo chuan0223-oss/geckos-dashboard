@@ -147,6 +147,13 @@ if uploaded_file is not None:
         st.error("❌ 找不到「預估營收(TWD)」相關欄位，請檢查 Excel 表頭。")
         st.stop()
 
+    # [V72.2] 尋找狀態欄位 (用於判斷已結案)
+    status_col = None
+    for c in ['結案狀態', '專案狀態', '狀態']:
+        if c in df_full.columns:
+            status_col = c
+            break
+
     # =========================================================================
     # [全域樣式與變數]
     # =========================================================================
@@ -282,9 +289,7 @@ if uploaded_file is not None:
 
     total_revenue_twd = df_chart_source['Calculated_Total_TWD'].sum()
     total_profit_twd = df_chart_source['Calculated_Gross_Profit'].sum()
-    project_count_unique = df_chart_source['專案'].nunique()
-    
-    # [V72.1 Fix] Define 'now' globally right after data prep
+
     now = pd.Timestamp.now().normalize()
 
     # =========================================================================
@@ -353,13 +358,20 @@ if uploaded_file is not None:
         st.metric(label="營收貢獻王", value=top_contributor_text, delta=f"TWD {top_project_rev:,.0f}")
         
         if not df_chart_source.empty:
-            df_unique_proj = df_chart_source.drop_duplicates(subset=['專案'])
+            if status_col:
+                df_active_source = df_chart_source[df_chart_source[status_col].astype(str).str.strip() != '已結案']
+            else:
+                df_active_source = df_chart_source
+            
+            project_count_unique_active = df_active_source['專案'].nunique()
+            df_unique_proj = df_active_source.drop_duplicates(subset=['專案'])
+            
             if '開案類別' in df_unique_proj.columns:
                 type_counts = df_unique_proj['開案類別'].value_counts().reset_index()
                 type_counts.columns = ['Type', 'Count']
                 pro_colors = ['#2C3E50', '#5D6D7E', '#85929E', '#34495E', '#AAB7B8', '#D5DBDB']
                 
-                st.markdown(f"**總專案數: {project_count_unique}**")
+                st.markdown(f"**活躍專案數: {project_count_unique_active}**")
                 fig_donut = go.Figure()
                 fig_donut.add_trace(go.Pie(
                     labels=type_counts['Type'], values=type_counts['Count'], hole=0.75,
@@ -376,11 +388,112 @@ if uploaded_file is not None:
                     hoverinfo='skip', showlegend=False, textinfo='none'
                 ))
                 fig_donut.update_layout(
-                    annotations=[dict(text=str(project_count_unique), x=0.5, y=0.5, font=dict(size=40, color='white', weight='bold'), showarrow=False)],
+                    annotations=[dict(text=str(project_count_unique_active), x=0.5, y=0.5, font=dict(size=40, color='white', weight='bold'), showarrow=False)],
                     margin=dict(t=0, b=0, l=0, r=0), height=180, showlegend=False
                 )
                 st.plotly_chart(fig_donut, use_container_width=True)
             else: st.info("無 '開案類別'")
+
+    st.divider()
+
+    # =========================================================================
+    # [區塊 6] 營收 Top 10
+    # =========================================================================
+    with st.expander("🏆 營收 Top 10 專案 (含 PM 篩選)", expanded=True):
+        if total_revenue_twd > 0:
+            b6_col_metric, b6_col_pm, b6_col_type = st.columns([1.5, 1, 1])
+            with b6_col_pm:
+                pm_sel_b6 = st.selectbox("👤 篩選負責人", ["全部 (All)"] + list(unique_pms))
+            with b6_col_type:
+                type_sel_b6 = st.selectbox("📂 篩選開案類別", ["全部 (All)"] + list(unique_open_types))
+            
+            df_b6 = df_chart_source.copy()
+            if pm_sel_b6 != "全部 (All)": df_b6 = df_b6[df_b6['專案負責人_display'] == pm_sel_b6]
+            if type_sel_b6 != "全部 (All)": df_b6 = df_b6[df_b6['開案類別'] == type_sel_b6]
+            
+            local_rev = df_b6['Calculated_Total_TWD'].sum()
+            with b6_col_metric: st.metric(label=f"💰 預估總營收 (TWD)", value=f"{local_rev:,.0f}", help="顯示當前篩選條件下的總營收")
+
+            if not df_b6.empty:
+                df_b6_grouped = df_b6.groupby('專案').agg({
+                    'Calculated_Total_TWD': 'sum',
+                    'Calculated_Gross_Profit': 'sum'
+                }).reset_index()
+                
+                if status_col:
+                    status_df = df_b6.drop_duplicates(subset=['專案'])[['專案', status_col]]
+                    df_b6_grouped = pd.merge(df_b6_grouped, status_df, on='專案', how='left')
+                    df_b6_grouped['Project_Display'] = df_b6_grouped.apply(
+                        lambda r: f"<b>{r['專案']}</b>" if str(r[status_col]).strip() == '已結案' else r['專案'], axis=1
+                    )
+                else:
+                    df_b6_grouped['Project_Display'] = df_b6_grouped['專案']
+
+                df_chart = df_b6_grouped.nlargest(10, 'Calculated_Total_TWD').sort_values('Calculated_Total_TWD', ascending=True)
+                
+                if total_revenue_twd > 0: df_chart['Pct'] = (df_chart['Calculated_Total_TWD'] / total_revenue_twd) * 100
+                else: df_chart['Pct'] = 0
+                
+                max_val = df_chart['Calculated_Total_TWD'].max() if not df_chart.empty else 1
+                threshold = max_val * 0.15 
+                
+                def get_smart_color(val): return '#333333' if val < (max_val * 0.4) else '#FFFFFF'
+                df_chart['Inside_Color'] = df_chart['Calculated_Total_TWD'].apply(get_smart_color)
+
+                def get_bar_text(row):
+                    val_str = f"{row['Calculated_Total_TWD']:,.0f}"
+                    pct_str = f"<b>{row['Pct']:.1f}%</b>"
+                    if row['Calculated_Total_TWD'] < threshold: return f"{pct_str} | {val_str}"
+                    return val_str
+
+                def get_scatter_text(row):
+                    if row['Calculated_Total_TWD'] < threshold: return ""
+                    return f"<b>{row['Pct']:.1f}%</b>"
+
+                df_chart['Bar_Text'] = df_chart.apply(get_bar_text, axis=1)
+                df_chart['Scatter_Text'] = df_chart.apply(get_scatter_text, axis=1)
+
+                fig_bar = px.bar(df_chart, x='Calculated_Total_TWD', y='Project_Display', orientation='h', color='Calculated_Total_TWD', color_continuous_scale='Blues')
+                fig_bar.update_traces(text=df_chart['Bar_Text'], texttemplate='%{text}', textposition='outside', textfont=dict(size=14, color='#333333'))
+                fig_bar.add_trace(go.Scatter(x=[0] * len(df_chart), y=df_chart['Project_Display'], text=df_chart['Scatter_Text'], mode='text', textposition='middle right', textfont=dict(size=14, color=df_chart['Inside_Color']), hoverinfo='skip', showlegend=False))
+                fig_bar.update_layout(xaxis_title="預估營收 (含RMB換算)", yaxis_title="專案", xaxis=dict(range=[0, max_val * 1.35]))
+                st.plotly_chart(fig_bar, use_container_width=True)
+            else: st.warning("查無符合條件的專案")
+        else: st.info("無營收數據")
+
+    # =========================================================================
+    # [區塊 11] 預估毛利 Top 10
+    # =========================================================================
+    with st.expander("💎 預估毛利 Top 10 專案 (含 PM 篩選)", expanded=True):
+        if 'df_b6_grouped' in locals() and not df_b6_grouped.empty:
+            df_gp_chart = df_b6_grouped.nlargest(10, 'Calculated_Gross_Profit').sort_values('Calculated_Gross_Profit', ascending=True)
+            
+            max_gp = df_gp_chart['Calculated_Gross_Profit'].max() if not df_gp_chart.empty else 1
+            threshold_gp = max_gp * 0.15 
+            def get_smart_color_gp(val): return '#333333' if val < (max_gp * 0.4) else '#FFFFFF'
+            df_gp_chart['Inside_Color'] = df_gp_chart['Calculated_Gross_Profit'].apply(get_smart_color_gp)
+
+            df_gp_chart['Avg_Margin'] = (df_gp_chart['Calculated_Gross_Profit'] / df_gp_chart['Calculated_Total_TWD']) * 100
+            
+            def get_gp_bar_text(row):
+                val_str = f"{row['Calculated_Gross_Profit']:,.0f}"
+                margin_str = f"<b>{row['Avg_Margin']:.1f}%</b> (毛利率)"
+                if row['Calculated_Gross_Profit'] < threshold_gp: return f"{margin_str} | {val_str}"
+                return val_str
+
+            def get_gp_scatter_text(row):
+                if row['Calculated_Gross_Profit'] < threshold_gp: return ""
+                return f"<b>{row['Avg_Margin']:.1f}%</b> (毛利率)"
+
+            df_gp_chart['Bar_Text'] = df_gp_chart.apply(get_gp_bar_text, axis=1)
+            df_gp_chart['Scatter_Text'] = df_gp_chart.apply(get_gp_scatter_text, axis=1)
+
+            fig_gp = px.bar(df_gp_chart, x='Calculated_Gross_Profit', y='Project_Display', orientation='h', color='Calculated_Gross_Profit', color_continuous_scale='Greens')
+            fig_gp.update_traces(text=df_gp_chart['Bar_Text'], texttemplate='%{text}', textposition='outside', textfont=dict(size=14, color='#333333'))
+            fig_gp.add_trace(go.Scatter(x=[0] * len(df_gp_chart), y=df_gp_chart['Project_Display'], text=df_gp_chart['Scatter_Text'], mode='text', textposition='middle right', textfont=dict(size=14, color=df_gp_chart['Inside_Color']), hoverinfo='skip', showlegend=False))
+            fig_gp.update_layout(xaxis_title="預估毛利 (TWD)", yaxis_title="專案", xaxis=dict(range=[0, max_gp * 1.35]))
+            st.plotly_chart(fig_gp, use_container_width=True)
+        else: st.info("無毛利數據")
 
     st.divider()
 
@@ -552,14 +665,18 @@ if uploaded_file is not None:
             except Exception as e:
                 st.error(f"路徑圖錯誤: {e}")
 
+    st.divider()
+
     # =========================================================================
-    # [區塊 10] 預計訂單 Top 10 (Restored in V71.7)
+    # [區塊 10] 預計訂單 Top 10
     # =========================================================================
     with st.expander("⏳ 預計訂單即將到期 Top 10", expanded=True):
         if '預計訂單起始點' in df_chart_source.columns:
             cols_to_keep = ['專案', '預計訂單起始點', col_twd]
             if col_rmb: cols_to_keep.append(col_rmb)
             if '專案負責人' in df_chart_source.columns: cols_to_keep.append('專案負責人')
+            if status_col: cols_to_keep.append(status_col)
+            
             df_time = df_chart_source[cols_to_keep].copy()
             df_time['OrderDate'] = df_time['預計訂單起始點'].apply(lambda x: parse_quarter_date_end(x) if pd.notnull(x) and 'Q' in str(x) else pd.to_datetime(x, errors='coerce'))
             df_time = df_time.dropna(subset=['OrderDate'])
@@ -594,7 +711,11 @@ if uploaded_file is not None:
                     
                     def get_label(row):
                         pm = row.get('專案負責人', '')
-                        return f"{row['專案']} ({pm})" if pd.notnull(pm) else row['專案']
+                        p_name = row['專案']
+                        if status_col and str(row.get(status_col, '')).strip() == '已結案':
+                            p_name = f"<b>{p_name}</b>"
+                        return f"{p_name} ({pm})" if pd.notnull(pm) else p_name
+                    
                     df_plot['Y_Label'] = df_plot.apply(get_label, axis=1)
                     
                     def get_bar_text(row):
@@ -636,97 +757,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 6] 營收 Top 10 (V72.0: Dual Filter)
-    # =========================================================================
-    with st.expander("🏆 營收 Top 10 專案 (含 PM 篩選)", expanded=True):
-        if total_revenue_twd > 0:
-            b6_col_metric, b6_col_pm, b6_col_type = st.columns([1.5, 1, 1])
-            with b6_col_pm:
-                pm_sel_b6 = st.selectbox("👤 篩選負責人", ["全部 (All)"] + list(unique_pms))
-            with b6_col_type:
-                type_sel_b6 = st.selectbox("📂 篩選開案類別", ["全部 (All)"] + list(unique_open_types))
-            
-            df_b6 = df_chart_source.copy()
-            if pm_sel_b6 != "全部 (All)": df_b6 = df_b6[df_b6['專案負責人_display'] == pm_sel_b6]
-            if type_sel_b6 != "全部 (All)": df_b6 = df_b6[df_b6['開案類別'] == type_sel_b6]
-            
-            local_rev = df_b6['Calculated_Total_TWD'].sum()
-            with b6_col_metric: st.metric(label=f"💰 預估總營收 (TWD)", value=f"{local_rev:,.0f}", help="顯示當前篩選條件下的總營收")
-
-            if not df_b6.empty:
-                df_chart = df_b6.groupby('專案')['Calculated_Total_TWD'].sum().reset_index()
-                df_chart = df_chart.nlargest(10, 'Calculated_Total_TWD').sort_values('Calculated_Total_TWD', ascending=True)
-                
-                if total_revenue_twd > 0: df_chart['Pct'] = (df_chart['Calculated_Total_TWD'] / total_revenue_twd) * 100
-                else: df_chart['Pct'] = 0
-                
-                max_val = df_chart['Calculated_Total_TWD'].max() if not df_chart.empty else 1
-                threshold = max_val * 0.15 
-                def get_smart_color(val): return '#333333' if val < (max_val * 0.4) else '#FFFFFF'
-                df_chart['Inside_Color'] = df_chart['Calculated_Total_TWD'].apply(get_smart_color)
-
-                def get_bar_text(row):
-                    val_str = f"{row['Calculated_Total_TWD']:,.0f}"
-                    pct_str = f"<b>{row['Pct']:.1f}%</b>"
-                    if row['Calculated_Total_TWD'] < threshold: return f"{pct_str} | {val_str}"
-                    return val_str
-
-                def get_scatter_text(row):
-                    if row['Calculated_Total_TWD'] < threshold: return ""
-                    return f"<b>{row['Pct']:.1f}%</b>"
-
-                df_chart['Bar_Text'] = df_chart.apply(get_bar_text, axis=1)
-                df_chart['Scatter_Text'] = df_chart.apply(get_scatter_text, axis=1)
-
-                fig_bar = px.bar(df_chart, x='Calculated_Total_TWD', y='專案', orientation='h', color='Calculated_Total_TWD', color_continuous_scale='Blues')
-                fig_bar.update_traces(text=df_chart['Bar_Text'], texttemplate='%{text}', textposition='outside', textfont=dict(size=14, color='#333333'))
-                fig_bar.add_trace(go.Scatter(x=[0] * len(df_chart), y=df_chart['專案'], text=df_chart['Scatter_Text'], mode='text', textposition='middle right', textfont=dict(size=14, color=df_chart['Inside_Color']), hoverinfo='skip', showlegend=False))
-                fig_bar.update_layout(xaxis_title="預估營收 (含RMB換算)", yaxis_title="專案", xaxis=dict(range=[0, max_val * 1.35]))
-                st.plotly_chart(fig_bar, use_container_width=True)
-            else: st.warning("查無符合條件的專案")
-        else: st.info("無營收數據")
-
-    # =========================================================================
-    # [區塊 11] 預估毛利 Top 10 (V72.0: Auto-Linked)
-    # =========================================================================
-    with st.expander("💎 預估毛利 Top 10 專案 (含 PM 篩選)", expanded=True):
-        if 'df_b6' in locals() and not df_b6.empty:
-            df_gp_chart = df_b6.groupby('專案')['Calculated_Gross_Profit'].sum().reset_index()
-            df_gp_chart = df_gp_chart.nlargest(10, 'Calculated_Gross_Profit').sort_values('Calculated_Gross_Profit', ascending=True)
-            
-            max_gp = df_gp_chart['Calculated_Gross_Profit'].max() if not df_gp_chart.empty else 1
-            threshold_gp = max_gp * 0.15 
-            def get_smart_color_gp(val): return '#333333' if val < (max_gp * 0.4) else '#FFFFFF'
-            df_gp_chart['Inside_Color'] = df_gp_chart['Calculated_Gross_Profit'].apply(get_smart_color_gp)
-
-            df_rev_for_margin = df_b6.groupby('專案')['Calculated_Total_TWD'].sum().reset_index()
-            df_gp_chart = pd.merge(df_gp_chart, df_rev_for_margin, on='專案')
-            df_gp_chart['Avg_Margin'] = (df_gp_chart['Calculated_Gross_Profit'] / df_gp_chart['Calculated_Total_TWD']) * 100
-            
-            def get_gp_bar_text(row):
-                val_str = f"{row['Calculated_Gross_Profit']:,.0f}"
-                margin_str = f"<b>{row['Avg_Margin']:.1f}%</b> (毛利率)"
-                if row['Calculated_Gross_Profit'] < threshold_gp: return f"{margin_str} | {val_str}"
-                return val_str
-
-            def get_gp_scatter_text(row):
-                if row['Calculated_Gross_Profit'] < threshold_gp: return ""
-                return f"<b>{row['Avg_Margin']:.1f}%</b> (毛利率)"
-
-            df_gp_chart['Bar_Text'] = df_gp_chart.apply(get_gp_bar_text, axis=1)
-            df_gp_chart['Scatter_Text'] = df_gp_chart.apply(get_gp_scatter_text, axis=1)
-
-            fig_gp = px.bar(df_gp_chart, x='Calculated_Gross_Profit', y='專案', orientation='h', color='Calculated_Gross_Profit', color_continuous_scale='Greens')
-            fig_gp.update_traces(text=df_gp_chart['Bar_Text'], texttemplate='%{text}', textposition='outside', textfont=dict(size=14, color='#333333'))
-            fig_gp.add_trace(go.Scatter(x=[0] * len(df_gp_chart), y=df_gp_chart['專案'], text=df_gp_chart['Scatter_Text'], mode='text', textposition='middle right', textfont=dict(size=14, color=df_gp_chart['Inside_Color']), hoverinfo='skip', showlegend=False))
-            fig_gp.update_layout(xaxis_title="預估毛利 (TWD)", yaxis_title="專案", xaxis=dict(range=[0, max_gp * 1.35]))
-            st.plotly_chart(fig_gp, use_container_width=True)
-        else: st.info("無毛利數據")
-
-    st.divider()
-
-    # =========================================================================
-    # [區塊 4] & [區塊 5] (V71.9: Rich Hover with All Projects)
+    # [區塊 4] & [區塊 5]
     # =========================================================================
     if not df_chart_source.empty:
         with st.expander("📊 圖表分析 (產品類別 & 市場應用) - 點擊展開", expanded=False):
@@ -776,7 +807,7 @@ if uploaded_file is not None:
                 else: st.info("無資料")
 
     # =========================================================================
-    # [區塊 7] 詳細資料檢視 (V69.0: Optimized Buttons)
+    # [區塊 7] 詳細資料檢視
     # =========================================================================
     st.divider()
     st.subheader("📋 詳細資料檢視 (可編輯模式)")
@@ -859,7 +890,6 @@ if uploaded_file is not None:
                 st.toast(f"✅ 專案 {project_name} 資料已更新！", icon="💾")
                 st.rerun()
 
-    # [V69.0 Change: 4-Column Flat Layout]
     st.markdown("<br>", unsafe_allow_html=True)
     b_col1, b_col2, b_col3, b_col4 = st.columns([1, 1, 1.2, 1.2])
     
