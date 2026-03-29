@@ -285,98 +285,19 @@ if uploaded_file is not None:
         df_chart_source['Calculated_Gross_Profit'] = 0.0
 
     total_revenue_twd = df_chart_source['Calculated_Total_TWD'].sum()
-    total_actual_twd = df_chart_source['Calculated_Actual_Total_TWD'].sum()
     total_profit_twd = df_chart_source['Calculated_Gross_Profit'].sum()
 
     now = pd.Timestamp.now().normalize()
 
     # =========================================================================
-    # [區塊 2] KPI Metrics
+    # [區塊 2] 活躍專案總數 (V75.0: 極簡聚焦版)
     # =========================================================================
     st.divider()
-
-    total_margin_rate = (total_profit_twd / total_revenue_twd * 100) if total_revenue_twd > 0 else 0
-    total_ach_rate = (total_actual_twd / total_revenue_twd * 100) if total_revenue_twd > 0 else 0
-
-    df_mdr = df_chart_source[df_chart_source['開案類別'] == 'MDR']
-    mdr_rev = df_mdr['Calculated_Total_TWD'].sum()
-    mdr_actual = df_mdr['Calculated_Actual_Total_TWD'].sum()
-    mdr_ach_rate = (mdr_actual / mdr_rev * 100) if mdr_rev > 0 else 0
-    mdr_gp = df_mdr['Calculated_Gross_Profit'].sum()
-    mdr_margin = (mdr_gp / mdr_rev * 100) if mdr_rev > 0 else 0
-
-    df_npdr = df_chart_source[df_chart_source['開案類別'] == 'NPDR']
-    npdr_rev = df_npdr['Calculated_Total_TWD'].sum()
-    npdr_actual = df_npdr['Calculated_Actual_Total_TWD'].sum()
-    npdr_ach_rate = (npdr_actual / npdr_rev * 100) if npdr_rev > 0 else 0
-    npdr_gp = df_npdr['Calculated_Gross_Profit'].sum()
-    npdr_margin = (npdr_gp / npdr_rev * 100) if npdr_rev > 0 else 0
-
-    df_tdr = df_chart_source[df_chart_source['開案類別'] == 'TDR']
-    tdr_rev = df_tdr['Calculated_Total_TWD'].sum()
-    tdr_actual = df_tdr['Calculated_Actual_Total_TWD'].sum()
-    tdr_ach_rate = (tdr_actual / tdr_rev * 100) if tdr_rev > 0 else 0
-    tdr_gp = df_tdr['Calculated_Gross_Profit'].sum()
-    tdr_margin = (tdr_gp / tdr_rev * 100) if tdr_rev > 0 else 0
-
-    def render_kpi_card(title, icon, rev, actual, ach_rate, gp, margin, border_color, rmb_rate):
-        bar_width = min(ach_rate, 100)
-        bar_color = "#27AE60" if ach_rate >= 80 else ("#F1C40F" if ach_rate >= 50 else "#E74C3C")
-        help_rev = f"匯率換算: RMB * {rmb_rate}"
-        help_actual = "實際營收加總 (RMB 依系統匯率轉換)"
-        help_ach = "達成率計算方式：實際總營收 / 預估總營收"
-        help_gp = "計算方式：營收 * 預估毛利率 (若為區間取最低值)"
-        help_margin = "計算方式：(該類別總毛利 / 該類別總營收) * 100%"
-
-        html = f"""<div style="border: 1px solid rgba(128,128,128,0.2); padding: 15px; border-radius: 8px; border-left: 6px solid {border_color}; margin-bottom: 10px; background-color: rgba(128,128,128,0.02);">
-<h4 style="margin-top: 0; margin-bottom: 15px; font-size: 1.1em; display: flex; align-items: center;">
-<span style="margin-right: 8px;">{icon}</span> {title}
-</h4>
-<div style="display: flex; justify-content: space-between; margin-top: 10px;">
-<div style="width: 48%;" title="{help_rev}">
-<div style="font-size: 0.8em; opacity: 0.7; cursor: help;">預估營收 ℹ️</div>
-<div style="font-size: 1.1em; font-weight: bold;">{rev:,.0f}</div>
-</div>
-<div style="width: 48%; text-align: right;" title="{help_actual}">
-<div style="font-size: 0.8em; opacity: 0.7; cursor: help;">實際營收 ℹ️</div>
-<div style="font-size: 1.1em; font-weight: bold; color: #2980B9;">{actual:,.0f}</div>
-</div>
-</div>
-<div style="margin-top: 8px; margin-bottom: 2px; background-color: rgba(128,128,128,0.2); border-radius: 4px; height: 6px; width: 100%;" title="{help_ach}">
-<div style="background-color: {bar_color}; width: {bar_width}%; height: 100%; border-radius: 4px;"></div>
-</div>
-<div style="text-align: right; font-size: 0.85em; font-weight: bold; color: {bar_color}; margin-bottom: 12px;" title="{help_ach}">
-達成率 {ach_rate:.1f}%
-</div>
-<div style="border-top: 1px dashed rgba(128,128,128,0.3); padding-top: 10px; display: flex; justify-content: space-between;">
-<div style="width: 48%;" title="{help_gp}">
-<div style="font-size: 0.8em; opacity: 0.7; cursor: help;">預估毛利 ℹ️</div>
-<div style="font-size: 1.05em; font-weight: bold; color: #27AE60;">{gp:,.0f}</div>
-</div>
-<div style="width: 48%; text-align: right;" title="{help_margin}">
-<div style="font-size: 0.8em; opacity: 0.7; cursor: help;">毛利率 ℹ️</div>
-<div style="font-size: 1.05em; font-weight: bold; color: #8E44AD;">{margin:.1f}%</div>
-</div>
-</div>
-</div>"""
-        return html
-
-    # [V74.0] 稍微放大第 5 欄的寬度比例，給予圖表與英雄榜更多空間
-    col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns([1, 1, 1, 1, 1.3])
     
-    with col_kpi1:
-        st.markdown(render_kpi_card("全體匯總", "🌍", total_revenue_twd, total_actual_twd, total_ach_rate, total_profit_twd, total_margin_rate, "#34495E", rmb_rate), unsafe_allow_html=True)
-
-    with col_kpi2:
-        st.markdown(render_kpi_card("MDR 專案", "🔺", mdr_rev, mdr_actual, mdr_ach_rate, mdr_gp, mdr_margin, "#E74C3C", rmb_rate), unsafe_allow_html=True)
-
-    with col_kpi3:
-        st.markdown(render_kpi_card("NPDR 專案", "🔵", npdr_rev, npdr_actual, npdr_ach_rate, npdr_gp, npdr_margin, "#3498DB", rmb_rate), unsafe_allow_html=True)
-
-    with col_kpi4:
-        st.markdown(render_kpi_card("TDR 專案", "🔸", tdr_rev, tdr_actual, tdr_ach_rate, tdr_gp, tdr_margin, "#E67E22", rmb_rate), unsafe_allow_html=True)
-
-    with col_kpi5:
+    c_donut, c_blank1, c_blank2 = st.columns([1.5, 2, 2])
+    
+    with c_donut:
+        st.markdown("### 🍩 活躍專案分佈")
         if not df_chart_source.empty:
             if status_col:
                 df_active_source = df_chart_source[df_chart_source[status_col].astype(str).str.strip() != '已結案']
@@ -386,58 +307,6 @@ if uploaded_file is not None:
             project_count_unique_active = df_active_source['專案'].nunique()
             df_unique_proj = df_active_source.drop_duplicates(subset=['專案'])
             
-            df_hero = df_chart_source.groupby('專案').agg({
-                'Calculated_Total_TWD': 'sum',
-                'Calculated_Gross_Profit': 'sum',
-                'Calculated_Actual_Total_TWD': 'sum'
-            }).reset_index()
-
-            if not df_hero.empty and df_hero['Calculated_Total_TWD'].sum() > 0:
-                idx_rev = df_hero['Calculated_Total_TWD'].idxmax()
-                rev_king = df_hero.loc[idx_rev, '專案']
-                rev_val = df_hero.loc[idx_rev, 'Calculated_Total_TWD']
-                
-                idx_gp = df_hero['Calculated_Gross_Profit'].idxmax()
-                gp_king = df_hero.loc[idx_gp, '專案']
-                gp_val = df_hero.loc[idx_gp, 'Calculated_Gross_Profit']
-                    
-                top10_hero = df_hero.nlargest(10, 'Calculated_Total_TWD').copy()
-                top10_hero['Ach_Pct'] = np.where(top10_hero['Calculated_Total_TWD'] > 0,
-                                                 (top10_hero['Calculated_Actual_Total_TWD'] / top10_hero['Calculated_Total_TWD']) * 100, 0)
-                valid_ach = top10_hero[top10_hero['Ach_Pct'] > 0]
-                
-                if not valid_ach.empty:
-                    idx_ach = valid_ach['Ach_Pct'].idxmax()
-                    ach_king = valid_ach.loc[idx_ach, '專案']
-                    ach_val = valid_ach.loc[idx_ach, 'Ach_Pct']
-                else:
-                    ach_king, ach_val = "-", 0
-                    
-            else:
-                rev_king, rev_val = "-", 0
-                gp_king, gp_val = "-", 0
-                ach_king, ach_val = "-", 0
-
-            html_hero = f"""<div style="border: 1px solid rgba(128,128,128,0.2); padding: 15px; border-radius: 8px; border-left: 6px solid #F1C40F; margin-bottom: 5px; background-color: rgba(128,128,128,0.02);">
-<h4 style="margin-top: 0; margin-bottom: 15px; font-size: 1.1em; display: flex; align-items: center; color: #333;">
-<span style="margin-right: 8px;">🏆</span> 專案英雄榜
-</h4>
-<div style="display: flex; justify-content: space-between; font-size: 0.9em; margin-bottom: 12px;" title="全專案預估總營收第一名 (對齊區塊6)">
-<div>💰 <b>{rev_king}</b> <span style='font-size:0.8em;color:#7F8C8D;'>(營收貢獻王)</span></div>
-<div style="font-weight:bold; color:#2980B9;">{rev_val:,.0f}</div>
-</div>
-<div style="display: flex; justify-content: space-between; font-size: 0.9em; margin-bottom: 12px;" title="全專案預估毛利總額第一名 (對齊區塊11)">
-<div>💎 <b>{gp_king}</b> <span style='font-size:0.8em;color:#7F8C8D;'>(獲利貢獻王)</span></div>
-<div style="font-weight:bold; color:#27AE60;">{gp_val:,.0f}</div>
-</div>
-<div style="display: flex; justify-content: space-between; font-size: 0.9em;" title="營收前10大專案中，實際達成率最高者 (對齊區塊12)">
-<div>🎯 <b>{ach_king}</b> <span style='font-size:0.8em;color:#7F8C8D;'>(最佳達標專案)</span></div>
-<div style="font-weight:bold; color:#E67E22;">{ach_val:.1f}%</div>
-</div>
-</div>"""
-            st.markdown(html_hero, unsafe_allow_html=True)
-            
-            # Donut Chart - [V74.0] Increased size and height
             if '開案類別' in df_unique_proj.columns:
                 type_counts = df_unique_proj['開案類別'].value_counts().reset_index()
                 type_counts.columns = ['Type', 'Count']
@@ -448,7 +317,7 @@ if uploaded_file is not None:
                     labels=type_counts['Type'], values=type_counts['Count'], hole=0.75,
                     textinfo='label+value', textposition='inside',
                     insidetextorientation='horizontal',
-                    insidetextfont=dict(color='white', size=15, weight='bold'), # [V74.0] 12px -> 15px
+                    insidetextfont=dict(color='white', size=15, weight='bold'),
                     marker=dict(colors=pro_colors, line=dict(color='#FFFFFF', width=1)),
                     hoverinfo='label+percent+value', showlegend=False, sort=False
                 ))
@@ -459,8 +328,8 @@ if uploaded_file is not None:
                     hoverinfo='skip', showlegend=False, textinfo='none'
                 ))
                 fig_donut.update_layout(
-                    annotations=[dict(text=f"專案: {project_count_unique_active}", x=0.5, y=0.5, font=dict(size=24, color='white', weight='bold'), showarrow=False)],
-                    margin=dict(t=10, b=10, l=0, r=0), height=240, showlegend=False # [V74.0] 140px -> 240px
+                    annotations=[dict(text=f"活躍: {project_count_unique_active}", x=0.5, y=0.5, font=dict(size=24, color='white', weight='bold'), showarrow=False)],
+                    margin=dict(t=10, b=10, l=0, r=0), height=240, showlegend=False
                 )
                 st.plotly_chart(fig_donut, use_container_width=True)
             else: st.info("無 '開案類別'")
@@ -470,7 +339,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 6] 營收 Top 10
+    # [區塊 6] 預估營收 Top 10 
     # =========================================================================
     with st.expander("🏆 預估營收 Top 10 專案 (含 PM 篩選)", expanded=True):
         if total_revenue_twd > 0:
@@ -538,115 +407,6 @@ if uploaded_file is not None:
         else: st.info("無營收數據")
 
     # =========================================================================
-    # [區塊 12] 🎯 營收達成率
-    # =========================================================================
-    with st.expander("🎯 營收達成率 (預估營收 vs 實際營收)", expanded=True):
-        if 'df_b6_grouped' in locals() and not df_b6_grouped.empty:
-            
-            local_target_rev = df_b6['Calculated_Total_TWD'].sum()
-            local_actual_rev = df_b6['Calculated_Actual_Total_TWD'].sum()
-            
-            b12_c1, b12_c2, b12_c3 = st.columns([1, 1, 2])
-            with b12_c1:
-                st.metric(label="💰 預估總營收 (TWD)", value=f"{local_target_rev:,.0f}", help="當前篩選條件下的預估總營收")
-            with b12_c2:
-                st.metric(label="📈 實際總營收 (TWD)", value=f"{local_actual_rev:,.0f}", help="當前篩選條件下的實際總營收")
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            df_bullet = df_b6_grouped.nlargest(10, 'Calculated_Total_TWD').sort_values('Calculated_Total_TWD', ascending=True)
-            
-            df_bullet['Ach_Pct'] = np.where(df_bullet['Calculated_Total_TWD'] > 0, 
-                                           (df_bullet['Calculated_Actual_Total_TWD'] / df_bullet['Calculated_Total_TWD']) * 100, 
-                                           0)
-            
-            max_target = df_bullet['Calculated_Total_TWD'].max() if not df_bullet.empty else 1
-            max_actual = df_bullet['Calculated_Actual_Total_TWD'].max() if not df_bullet.empty else 1
-            axis_max = max(max_target, max_actual)
-            
-            threshold_ach = axis_max * 0.15 
-            
-            def get_bullet_texts(row):
-                t = float(row['Calculated_Total_TWD'])
-                a = float(row['Calculated_Actual_Total_TWD'])
-                pct = float(row['Ach_Pct'])
-                
-                t_str_plain = f"預估: {t:,.0f}"
-                t_str_html = f"<span style='font-size:14px; color:#7F8C8D;'>預估: {t:,.0f}</span>"
-                a_str = f"<b>達成率: {pct:.1f}%</b>"
-                
-                t_bar = ""
-                a_bar = ""
-                scat_out = ""
-                scat_in = ""
-                
-                t_is_short = t < threshold_ach
-                a_is_short = a < threshold_ach
-
-                if not t_is_short and not a_is_short:
-                    t_bar = t_str_plain
-                    scat_in = a_str
-                elif t_is_short and a_is_short:
-                    scat_out = f"{t_str_html}  |  {a_str}"
-                elif not t_is_short and a_is_short:
-                    t_bar = t_str_plain
-                    a_bar = a_str
-                elif t_is_short and not a_is_short:
-                    scat_out = f"{t_str_html}  |  {a_str}"
-                        
-                return pd.Series([t_bar, a_bar, scat_out, scat_in, max(t, a)])
-
-            df_bullet[['T_Bar_Txt', 'A_Bar_Txt', 'Scat_Out_Txt', 'Scat_In_Txt', 'Max_Val']] = df_bullet.apply(get_bullet_texts, axis=1, result_type='expand')
-
-            customdata_array = df_bullet[['Calculated_Total_TWD', 'Calculated_Actual_Total_TWD', 'Ach_Pct']].values
-            master_hover = "<b>%{y}</b><br>預估營收: %{customdata[0]:,.0f}<br>實際營收: %{customdata[1]:,.0f}<br>達成率: %{customdata[2]:.1f}%<extra></extra>"
-
-            fig_bullet = go.Figure()
-            
-            fig_bullet.add_trace(go.Bar(
-                x=df_bullet['Calculated_Total_TWD'], y=df_bullet['Project_Display'], orientation='h',
-                name='預估營收', marker=dict(color='#D6EAF8'), 
-                text=df_bullet['T_Bar_Txt'], textposition='outside', 
-                textfont=dict(size=14, color='#7F8C8D'),
-                customdata=customdata_array, hovertemplate=master_hover,
-                constraintext='none'
-            ))
-            
-            fig_bullet.add_trace(go.Bar(
-                x=df_bullet['Calculated_Actual_Total_TWD'], y=df_bullet['Project_Display'], orientation='h',
-                name='實際營收', marker=dict(color='#21618C'), width=0.4, 
-                text=df_bullet['A_Bar_Txt'], textposition='outside', 
-                textfont=dict(size=16, color='#333333'), 
-                customdata=customdata_array, hovertemplate=master_hover,
-                constraintext='none'
-            ))
-
-            fig_bullet.add_trace(go.Scatter(
-                x=df_bullet['Max_Val'], y=df_bullet['Project_Display'], mode='text',
-                text=df_bullet['Scat_Out_Txt'], textposition='middle right',
-                textfont=dict(size=16, color='#333333'),
-                hoverinfo='skip', showlegend=False
-            ))
-
-            fig_bullet.add_trace(go.Scatter(
-                x=[0]*len(df_bullet), y=df_bullet['Project_Display'], mode='text',
-                text=df_bullet['Scat_In_Txt'], textposition='middle right',
-                textfont=dict(size=16, color='#FFFFFF'), 
-                hoverinfo='skip', showlegend=False 
-            ))
-            
-            fig_bullet.update_layout(
-                barmode='overlay', xaxis_title="營收金額 (TWD)", yaxis_title="專案",
-                xaxis=dict(range=[0, axis_max * 1.35]),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            
-            st.plotly_chart(fig_bullet, use_container_width=True)
-            st.caption("💡 提示：淺藍色寬條代表「預估營收」，深藍色細條代表「實際營收」。")
-        else:
-            st.info("無數據可供顯示")
-
-    # =========================================================================
     # [區塊 11] 預估毛利 Top 10
     # =========================================================================
     with st.expander("💎 預估毛利 Top 10 專案 (含 PM 篩選)", expanded=True):
@@ -687,7 +447,7 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # [區塊 10] 預計訂單 Top 10
+    # [區塊 10] 預計訂單即將到期 Top 10
     # =========================================================================
     with st.expander("⏳ 預計訂單即將到期 Top 10", expanded=True):
         if '預計訂單起始點' in df_chart_source.columns:
