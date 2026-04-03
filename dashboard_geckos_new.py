@@ -9,7 +9,7 @@ import re
 # =========================================================================
 # ⚙️ 設定網頁標題與佈局 (Wide Mode)
 # =========================================================================
-st.set_page_config(page_title="凱鍶 財務預算戰情室 V1.6", layout="wide")
+st.set_page_config(page_title="凱鍶 財務預算戰情室 V1.7", layout="wide")
 
 # =========================================================================
 # 🔐 [資安強化] 身分驗證
@@ -46,7 +46,7 @@ def check_password():
 #     st.stop()
 
 # =========================================================================
-# ⬇️ Dashboard 主程式 (Version: V1.6)
+# ⬇️ Dashboard 主程式 (Version: V1.7)
 # =========================================================================
 st.title("📊 2026 年度預算戰情室 (Budget vs. Actual)")
 
@@ -65,7 +65,7 @@ def clean_percent(val):
     except: return 0.0
 
 # =========================================================================
-# 📁 資料上傳與多檔合併預處理
+# 📁 資料上傳與多檔合併預處理 (V1.7 智慧防呆版)
 # =========================================================================
 st.sidebar.header("📂 資料上傳區")
 uploaded_files = st.sidebar.file_uploader("請上傳年度預算表 (可多選 CSV/Excel)", type=["csv", "xlsx"], accept_multiple_files=True)
@@ -80,24 +80,59 @@ if uploaded_files:
             else:
                 df_raw = pd.read_excel(file, header=None)
 
-            h1 = df_raw.iloc[0].ffill().astype(str).str.strip()
-            h2 = df_raw.iloc[1].astype(str).str.strip()
+            # --- 動態智慧掃描表頭位置 ---
+            header_idx = -1
+            h2 = []
             
-            new_cols = []
-            for c1, c2 in zip(h1, h2):
-                if c1 == 'nan' or c1 == '': new_cols.append(c2)
-                else: new_cols.append(f"{c1}_{c2}")
-                    
-            df_temp = df_raw.iloc[2:].copy()
+            # 掃描前 10 行尋找特徵關鍵字
+            for i in range(min(10, len(df_raw))):
+                # 強制移除 BOM (\ufeff) 與頭尾空白
+                row_vals = [str(val).replace('\ufeff', '').strip() for val in df_raw.iloc[i].tolist()]
+                if '專案' in row_vals or '項目' in row_vals:
+                    header_idx = i
+                    h2 = row_vals
+                    break
+            
+            if header_idx == -1:
+                st.error(f"檔案 {file.name} 解析失敗：無法在表格前 10 行找到 '專案' 或 '項目' 欄位。")
+                st.stop()
+
+            # 組合新欄位名稱
+            if header_idx == 0:
+                # 只有單層表頭的防呆機制
+                new_cols = h2
+            else:
+                # 抓取主表頭的前一行作為月份/Total
+                h1_raw = df_raw.iloc[header_idx - 1].ffill().astype(str)
+                h1 = [v.replace('\ufeff', '').strip() for v in h1_raw]
+                
+                new_cols = []
+                for c1, c2 in zip(h1, h2):
+                    # 考慮不同 Pandas 版本處理 NaN 的字串結果
+                    if c1.lower() in ['nan', 'none', '<na>', 'nat', '']:
+                        new_cols.append(c2)
+                    else:
+                        new_cols.append(f"{c1}_{c2}")
+                        
+            # 擷取資料區塊
+            df_temp = df_raw.iloc[header_idx + 1:].copy()
             df_temp.columns = new_cols
             
+            # --- 欄位校正與清理 ---
             if '項目' in df_temp.columns:
                 df_temp = df_temp.rename(columns={'專案': '開案類別', '項目': '專案', '類別': '產品類別'})
                 
+            # 二次確認專案欄位存在
+            if '專案' not in df_temp.columns:
+                st.error(f"檔案 {file.name} 欄位重組失敗。目前抓取到的欄位：{list(df_temp.columns)}")
+                st.stop()
+                
+            # 清除空值列與合計列
             df_temp = df_temp[df_temp['專案'] != '合計']
             df_temp = df_temp.dropna(subset=['專案'])
-            df_temp = df_temp[df_temp['專案'].str.strip() != '']
+            df_temp = df_temp[df_temp['專案'].astype(str).str.strip() != '']
             
+            # 自動標記公司別
             if "鎧鍶釩" in file.name:
                 df_temp['公司別'] = '鎧鍶釩'
             elif "凱鍶" in file.name:
@@ -108,7 +143,7 @@ if uploaded_files:
             df_list.append(df_temp)
             
         except Exception as e:
-            st.error(f"檔案 {file.name} 讀取或解析失敗: {e}")
+            st.error(f"檔案 {file.name} 讀取或解析失敗: {str(e)}")
             st.stop()
 
     if not df_list:
@@ -208,13 +243,13 @@ if uploaded_files:
         fig_trend.add_trace(go.Bar(x=df_trend['Month'], y=df_trend['Actual'], name='實際 (Actual)', marker_color='#2E86C1', yaxis='y1'))
         fig_trend.add_trace(go.Scatter(x=df_trend['Month'], y=df_trend['Achieve_Rate'], name='達成率 (%)', mode='lines+markers+text', marker=dict(color='#E74C3C', size=8), line=dict(width=3, dash='dot'), text=[f"{val:.0%}" for val in df_trend['Achieve_Rate']], textposition='top center', yaxis='y2'))
 
-        fig_trend.update_layout(barmode='group', yaxis=dict(title='金額 (TWD)', showgrid=True, gridcolor='#E5E8E8'), yaxis2=dict(title='達成率', overlaying='y', side='right', tickformat='.0%', range=[0, max(1.2, df_trend['Achieve_Rate'].max() * 1.1)]), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=0, r=0, t=60, b=0), height=400, hovermode="x unified")
+        fig_trend.update_layout(barmode='group', yaxis=dict(title='金額 (TWD)', showgrid=True, gridcolor='#E5E8E8'), yaxis2=dict(title='達成率', overlaying='y', side='right', tickformat='.0%', range=[0, max(1.2, df_trend['Achieve_Rate'].max() * 1.1) if not df_trend.empty else 1.2]), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=0, r=0, t=60, b=0), height=400, hovermode="x unified")
         st.plotly_chart(fig_trend, use_container_width=True)
     else:
         st.info("尚無完整的月份資料可供繪製趨勢圖。")
 
     # =========================================================================
-    # 🏆 Top 10 預算貢獻專案 (V1.6 優化版)
+    # 🏆 Top 10 預算貢獻專案
     # =========================================================================
     st.divider()
     col_chart1, col_chart2 = st.columns([1.5, 1])
@@ -229,34 +264,31 @@ if uploaded_files:
             else:
                 df_top10['顯示專案'] = df_top10['專案']
                 
-            # 計算 X 軸上限，預留空間給文字標籤
             max_val = df_top10['Total_預算'].max()
             x_limit = max_val * 1.25 if max_val > 0 else 100
                 
             fig_bar = go.Figure()
-            # 背景：預算
             fig_bar.add_trace(go.Bar(
                 y=df_top10['顯示專案'], x=df_top10['Total_預算'], orientation='h', 
                 name='Total 預算', marker_color='rgba(46, 134, 193, 0.2)', 
                 marker_line_color='#2E86C1', marker_line_width=1,
                 hoverinfo='x+name'
             ))
-            # 前景：實際
             fig_bar.add_trace(go.Bar(
                 y=df_top10['顯示專案'], x=df_top10['Total_實際'], orientation='h', 
                 name='Total 實際', marker_color='#17A589', 
                 text=[f" 達成 {r:.0%}" for r in df_top10['Total_達成率']], 
                 textposition='outside',
-                cliponaxis=False, # 確保文字不被座標軸裁切
+                cliponaxis=False,
                 hoverinfo='x+name'
             ))
             fig_bar.update_layout(
                 barmode='overlay', 
                 yaxis_title="專案", 
-                xaxis=dict(title="金額 (TWD)", range=[0, x_limit]), # 動態設定範圍
+                xaxis=dict(title="金額 (TWD)", range=[0, x_limit]), 
                 height=400, 
-                margin=dict(l=0, r=50, t=80, b=0), # 增加右側與上方邊距
-                legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5) # 圖例居中置頂
+                margin=dict(l=0, r=50, t=80, b=0), 
+                legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5) 
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
