@@ -84,13 +84,10 @@ def parse_margin_min(val):
     if min_val > 1.0: return min_val / 100.0
     return min_val
 
-# [V75.1] 安全選項過濾器：徹底解決 TypeError 崩潰問題，並清除 UI 上的 "nan" 雜訊
 def get_safe_options(df, col_name):
     """安全地從 DataFrame 取得不含空值的排序唯一值清單"""
     if col_name and col_name in df.columns:
-        # 1. 移除空值 2. 轉字串 3. 取唯一值 4. 轉原生 list
         opts = df[col_name].dropna().astype(str).unique().tolist()
-        # 再次過濾掉轉換後變成 'nan' 字串的幽靈空值
         opts = [x for x in opts if x.lower() != 'nan' and x.strip() != '']
         return sorted(opts)
     return []
@@ -108,17 +105,13 @@ if uploaded_file is not None:
             
             df_raw.columns = df_raw.columns.str.strip()
             
-            # [V47] 欄位格式優化
             if '專案負責人' in df_raw.columns:
                 df_raw['專案負責人'] = df_raw['專案負責人'].astype(str).replace('nan', '')
 
-            # 數值前處理
+            # [V75.2] 無差別強制數值轉換防護 (移除所有的 dtype 判斷，強制拔除逗號轉數字)
             for col in df_raw.columns:
                 if '營收' in col: 
-                     if df_raw[col].dtype == 'object':
-                        df_raw[col] = pd.to_numeric(df_raw[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-                     else:
-                        df_raw[col] = df_raw[col].fillna(0)
+                    df_raw[col] = pd.to_numeric(df_raw[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
             st.session_state['full_df'] = df_raw
             st.session_state['current_file_id'] = file_id
@@ -191,7 +184,7 @@ if uploaded_file is not None:
         return pd.NaT
 
     # =========================================================================
-    # [區塊 1] 篩選條件 (V75.1: 套用安全選項過濾器)
+    # [區塊 1] 篩選條件
     # =========================================================================
     st.sidebar.header("🔍 專案篩選器")
     st.sidebar.markdown("### 🎯 核心鎖定")
@@ -269,19 +262,19 @@ if uploaded_file is not None:
     else:
         df_chart_source['專案負責人_display'] = "未定義"
 
-    # [V75.1: 同樣套用安全過濾器]
     unique_pms = get_safe_options(df_chart_source, '專案負責人_display')
     unique_open_types = get_safe_options(df_chart_source, '開案類別')
 
-    val_twd = df_chart_source[col_twd].fillna(0)
-    val_rmb = df_chart_source[col_rmb].fillna(0) if col_rmb else 0
+    # [V75.2] 第二層防護：即使在前端編輯表亂改，計算時也會強制清洗字串
+    val_twd = pd.to_numeric(df_chart_source[col_twd].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    val_rmb = pd.to_numeric(df_chart_source[col_rmb].astype(str).str.replace(',', ''), errors='coerce').fillna(0) if col_rmb else 0
     df_chart_source['Calculated_Total_TWD'] = val_twd + (val_rmb * rmb_rate)
     
     col_actual_twd = '實際營收(TWD)' if '實際營收(TWD)' in df_chart_source.columns else None
     col_actual_rmb = '實際營收(RMB)' if '實際營收(RMB)' in df_chart_source.columns else None
     
-    val_actual_twd = df_chart_source[col_actual_twd].fillna(0) if col_actual_twd else 0
-    val_actual_rmb = df_chart_source[col_actual_rmb].fillna(0) if col_actual_rmb else 0
+    val_actual_twd = pd.to_numeric(df_chart_source[col_actual_twd].astype(str).str.replace(',', ''), errors='coerce').fillna(0) if col_actual_twd else 0
+    val_actual_rmb = pd.to_numeric(df_chart_source[col_actual_rmb].astype(str).str.replace(',', ''), errors='coerce').fillna(0) if col_actual_rmb else 0
     df_chart_source['Calculated_Actual_Total_TWD'] = val_actual_twd + (val_actual_rmb * rmb_rate)
 
     if col_margin:
