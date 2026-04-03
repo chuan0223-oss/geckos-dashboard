@@ -74,7 +74,6 @@ def get_week_str(dt):
     iso_cal = dt.isocalendar()
     return f"{iso_cal.year}-W{iso_cal.week:02d}"
 
-# Helper to parse margin ranges
 def parse_margin_min(val):
     if pd.isna(val) or str(val).strip() == '': return 0.0
     val_str = str(val).replace('%', '')
@@ -84,6 +83,17 @@ def parse_margin_min(val):
     min_val = min(floats)
     if min_val > 1.0: return min_val / 100.0
     return min_val
+
+# [V75.1] 安全選項過濾器：徹底解決 TypeError 崩潰問題，並清除 UI 上的 "nan" 雜訊
+def get_safe_options(df, col_name):
+    """安全地從 DataFrame 取得不含空值的排序唯一值清單"""
+    if col_name and col_name in df.columns:
+        # 1. 移除空值 2. 轉字串 3. 取唯一值 4. 轉原生 list
+        opts = df[col_name].dropna().astype(str).unique().tolist()
+        # 再次過濾掉轉換後變成 'nan' 字串的幽靈空值
+        opts = [x for x in opts if x.lower() != 'nan' and x.strip() != '']
+        return sorted(opts)
+    return []
 
 if uploaded_file is not None:
     # 2. 讀取與初始化資料
@@ -181,18 +191,14 @@ if uploaded_file is not None:
         return pd.NaT
 
     # =========================================================================
-    # [區塊 1] 篩選條件
+    # [區塊 1] 篩選條件 (V75.1: 套用安全選項過濾器)
     # =========================================================================
     st.sidebar.header("🔍 專案篩選器")
     st.sidebar.markdown("### 🎯 核心鎖定")
     
     pm_col = '專案負責人'
-    pm_options = sorted(df_full[pm_col].unique().astype(str)) if pm_col in df_full.columns else []
-    pm_options = [x for x in pm_options if x.lower() != 'nan' and x.strip() != '']
-    pm_filter = st.sidebar.multiselect("👤 專案負責人 (PM)", options=pm_options)
-
-    project_options = df_full['專案'].unique() if '專案' in df_full.columns else []
-    project_filter = st.sidebar.multiselect("🏷️ 專案名稱", options=project_options)
+    pm_filter = st.sidebar.multiselect("👤 專案負責人 (PM)", options=get_safe_options(df_full, pm_col))
+    project_filter = st.sidebar.multiselect("🏷️ 專案名稱", options=get_safe_options(df_full, '專案'))
 
     open_type_filter = []
     cat_filter = []
@@ -201,7 +207,7 @@ if uploaded_file is not None:
 
     with st.sidebar.expander("📂 產品與類別屬性", expanded=False):
         open_type_col = '開案類別'
-        open_type_filter = st.multiselect("開案類別", options=df_full[open_type_col].unique()) if open_type_col in df_full.columns else []
+        open_type_filter = st.multiselect("開案類別", options=get_safe_options(df_full, open_type_col))
 
         if '產品類別' in df_full.columns:
             cat_col_name = '產品類別'
@@ -209,18 +215,18 @@ if uploaded_file is not None:
             cat_col_name = '專案類別'
         
         if cat_col_name:
-            cat_filter = st.multiselect("產品類別", options=df_full[cat_col_name].unique())
+            cat_filter = st.multiselect("產品類別", options=get_safe_options(df_full, cat_col_name))
 
         scene_col = '產業應用場景'
-        scene_filter = st.multiselect("產業應用場景", options=df_full[scene_col].unique()) if scene_col in df_full.columns else []
+        scene_filter = st.multiselect("產業應用場景", options=get_safe_options(df_full, scene_col))
 
     market_filter = []
     order_start_filter = []
     order_col = '預計訂單起始點'
 
     with st.sidebar.expander("🌍 市場與時程", expanded=False):
-        market_filter = st.multiselect("目標市場", options=df_full['市場'].unique()) if '市場' in df_full.columns else []
-        order_start_filter = st.multiselect("預計訂單時間 (Quarter)", options=sorted(df_full[order_col].astype(str).unique())) if order_col in df_full.columns else []
+        market_filter = st.multiselect("目標市場", options=get_safe_options(df_full, '市場'))
+        order_start_filter = st.multiselect("預計訂單時間 (Quarter)", options=get_safe_options(df_full, order_col))
     
     st.sidebar.divider()
     st.sidebar.markdown("### ⚙️ 參數設定")
@@ -263,8 +269,9 @@ if uploaded_file is not None:
     else:
         df_chart_source['專案負責人_display'] = "未定義"
 
-    unique_pms = sorted(df_chart_source['專案負責人_display'].unique())
-    unique_open_types = sorted(df_chart_source['開案類別'].unique()) if '開案類別' in df_chart_source.columns else []
+    # [V75.1: 同樣套用安全過濾器]
+    unique_pms = get_safe_options(df_chart_source, '專案負責人_display')
+    unique_open_types = get_safe_options(df_chart_source, '開案類別')
 
     val_twd = df_chart_source[col_twd].fillna(0)
     val_rmb = df_chart_source[col_rmb].fillna(0) if col_rmb else 0
@@ -285,6 +292,7 @@ if uploaded_file is not None:
         df_chart_source['Calculated_Gross_Profit'] = 0.0
 
     total_revenue_twd = df_chart_source['Calculated_Total_TWD'].sum()
+    total_actual_twd = df_chart_source['Calculated_Actual_Total_TWD'].sum()
     total_profit_twd = df_chart_source['Calculated_Gross_Profit'].sum()
 
     now = pd.Timestamp.now().normalize()
