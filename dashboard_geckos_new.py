@@ -9,7 +9,7 @@ import re
 # =========================================================================
 # ⚙️ 設定網頁標題與佈局 (Wide Mode)
 # =========================================================================
-st.set_page_config(page_title="凱鍶 財務預算戰情室 V1.7", layout="wide")
+st.set_page_config(page_title="凱鍶 財務預算戰情室 V1.8", layout="wide")
 
 # =========================================================================
 # 🔐 [資安強化] 身分驗證
@@ -46,7 +46,7 @@ def check_password():
 #     st.stop()
 
 # =========================================================================
-# ⬇️ Dashboard 主程式 (Version: V1.7)
+# ⬇️ Dashboard 主程式 (Version: V1.8)
 # =========================================================================
 st.title("📊 2026 年度預算戰情室 (Budget vs. Actual)")
 
@@ -65,7 +65,7 @@ def clean_percent(val):
     except: return 0.0
 
 # =========================================================================
-# 📁 資料上傳與多檔合併預處理 (V1.7 智慧防呆版)
+# 📁 資料上傳與多檔合併預處理 (V1.8 終極防呆版)
 # =========================================================================
 st.sidebar.header("📂 資料上傳區")
 uploaded_files = st.sidebar.file_uploader("請上傳年度預算表 (可多選 CSV/Excel)", type=["csv", "xlsx"], accept_multiple_files=True)
@@ -86,7 +86,7 @@ if uploaded_files:
             
             # 掃描前 10 行尋找特徵關鍵字
             for i in range(min(10, len(df_raw))):
-                # 強制移除 BOM (\ufeff) 與頭尾空白
+                # 強制轉換為 str 確保不會報錯
                 row_vals = [str(val).replace('\ufeff', '').strip() for val in df_raw.iloc[i].tolist()]
                 if '專案' in row_vals or '項目' in row_vals:
                     header_idx = i
@@ -99,18 +99,16 @@ if uploaded_files:
 
             # 組合新欄位名稱
             if header_idx == 0:
-                # 只有單層表頭的防呆機制
                 new_cols = h2
             else:
-                # 抓取主表頭的前一行作為月份/Total
-                h1_raw = df_raw.iloc[header_idx - 1].ffill().astype(str)
-                h1 = [v.replace('\ufeff', '').strip() for v in h1_raw]
+                h1_raw = df_raw.iloc[header_idx - 1].ffill().tolist()
+                # 【修復核心】：對 h1_raw 裡的所有元素強制 str()，消滅 float 帶來的 replace 錯誤
+                h1 = [str(v).replace('\ufeff', '').strip() for v in h1_raw]
                 
                 new_cols = []
                 for c1, c2 in zip(h1, h2):
-                    # 考慮不同 Pandas 版本處理 NaN 的字串結果
-                    if c1.lower() in ['nan', 'none', '<na>', 'nat', '']:
-                        new_cols.append(c2)
+                    if str(c1).lower() in ['nan', 'none', '<na>', 'nat', '']:
+                        new_cols.append(str(c2))
                     else:
                         new_cols.append(f"{c1}_{c2}")
                         
@@ -122,12 +120,10 @@ if uploaded_files:
             if '項目' in df_temp.columns:
                 df_temp = df_temp.rename(columns={'專案': '開案類別', '項目': '專案', '類別': '產品類別'})
                 
-            # 二次確認專案欄位存在
             if '專案' not in df_temp.columns:
                 st.error(f"檔案 {file.name} 欄位重組失敗。目前抓取到的欄位：{list(df_temp.columns)}")
                 st.stop()
                 
-            # 清除空值列與合計列
             df_temp = df_temp[df_temp['專案'] != '合計']
             df_temp = df_temp.dropna(subset=['專案'])
             df_temp = df_temp[df_temp['專案'].astype(str).str.strip() != '']
