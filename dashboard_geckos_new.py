@@ -9,7 +9,7 @@ import re
 # =========================================================================
 # ⚙️ 設定網頁標題與佈局 (Wide Mode)
 # =========================================================================
-st.set_page_config(page_title="凱鍶 財務預算戰情室 V1.9", layout="wide")
+st.set_page_config(page_title="凱鍶 財務預算戰情室 V1.92", layout="wide")
 
 # =========================================================================
 # 🔐 [資安強化] 身分驗證
@@ -46,7 +46,7 @@ def check_password():
 #     st.stop()
 
 # =========================================================================
-# ⬇️ Dashboard 主程式 (Version: V1.9)
+# ⬇️ Dashboard 主程式 (Version: V1.92)
 # =========================================================================
 st.title("📊 2026 年度預算戰情室 (Budget vs. Actual)")
 
@@ -146,12 +146,10 @@ if uploaded_files:
     st.sidebar.header("⚙️ 參數與篩選")
     
     view_option = st.sidebar.selectbox("🏢 檢視視角", options=["凱鍶+鎧鍶釩", "凱鍶", "鎧鍶釩"])
-    rmb_rate = st.sidebar.number_input("💱 RMB 換 TWD 匯率 (僅套用於鎧鍶釩)", value=4.40, step=0.05, format="%.2f")
-
-    # --- 月份區間篩選器 (V1.9 新增) ---
+    
+    # --- 1. 月份區間篩選器 ---
     st.sidebar.markdown("#### 📅 月份篩選")
     col_m1, col_m2 = st.sidebar.columns(2)
-    # 使用 number_input 來確保輸入值一定為數字，防止報錯，並設計得像文字欄位
     start_month = col_m1.number_input("從 (月)", min_value=1, max_value=12, value=1, step=1)
     end_month = col_m2.number_input("至 (月)", min_value=1, max_value=12, value=12, step=1)
 
@@ -170,20 +168,24 @@ if uploaded_files:
     else:
         df_filtered = df_combined.copy()
 
-    # --- 維度篩選器 (包含 V1.9 新增的專案篩選) ---
+    # --- 2. 維度篩選器 ---
     st.sidebar.markdown("#### 📌 維度篩選")
     project_options = [x for x in df_filtered['專案'].unique() if pd.notna(x) and str(x).strip() != '']
     project_filter = st.sidebar.multiselect("🏷️ 專案", options=project_options)
 
-    cat_options = [x for x in df_filtered['產品類別'].unique() if pd.notna(x) and str(x).strip() != '']
-    cat_filter = st.sidebar.multiselect("📂 產品類別", options=cat_options)
-
     type_options = [x for x in df_filtered['開案類別'].unique() if pd.notna(x) and str(x).strip() != '']
     type_filter = st.sidebar.multiselect("🏷️ 開案類別", options=type_options)
 
+    cat_options = [x for x in df_filtered['產品類別'].unique() if pd.notna(x) and str(x).strip() != '']
+    cat_filter = st.sidebar.multiselect("📂 產品類別", options=cat_options)
+
     if project_filter: df_filtered = df_filtered[df_filtered['專案'].isin(project_filter)]
-    if cat_filter: df_filtered = df_filtered[df_filtered['產品類別'].isin(cat_filter)]
     if type_filter: df_filtered = df_filtered[df_filtered['開案類別'].isin(type_filter)]
+    if cat_filter: df_filtered = df_filtered[df_filtered['產品類別'].isin(cat_filter)]
+
+    # --- 3. RMB 匯率設定 ---
+    st.sidebar.markdown("#### 💱 匯率設定")
+    rmb_rate = st.sidebar.number_input("RMB 換 TWD 匯率 (僅套用鎧鍶釩)", value=4.40, step=0.05, format="%.2f")
 
     # --- 數值轉換與 TWD 匯率套用 ---
     base_numeric_cols = ['目標毛利', '目標銷貨成本', 'Total_預算', 'Total_實際']
@@ -200,13 +202,12 @@ if uploaded_files:
     valid_b_cols = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_filtered.columns]
     valid_a_cols = [f"{m}_實際" for m in selected_months if f"{m}_實際" in df_filtered.columns]
     
-    # 覆寫原本的全年 Total，改為指定月份的加總
     df_filtered['Total_預算'] = df_filtered[valid_b_cols].sum(axis=1) if valid_b_cols else 0
     df_filtered['Total_實際'] = df_filtered[valid_a_cols].sum(axis=1) if valid_a_cols else 0
     df_filtered['Total_達成率'] = np.where(df_filtered['Total_預算'] > 0, df_filtered['Total_實際'] / df_filtered['Total_預算'], 0)
 
     # =========================================================================
-    # [區塊 2] 🎯 財務戰略指標
+    # [區塊 2] 🎯 財務戰略指標 (V1.92 適度字體版)
     # =========================================================================
     st.divider()
     st.markdown(f"### 🎯 財務戰略指標 ({start_month}月 ~ {end_month}月) - TWD")
@@ -216,11 +217,20 @@ if uploaded_files:
     total_gross_margin = df_filtered['目標毛利'].sum() if '目標毛利' in df_filtered.columns else 0
     overall_achieve_rate = (total_actual / total_budget) if total_budget > 0 else 0
 
+    # 字體大小調整：標題 1.0rem，數字 2.2rem (比 V1.91 縮小，比 V1.9 大)
+    def make_kpi_card(title, value, color="#2E86C1"):
+        return f"""
+        <div style="padding: 15px; border-radius: 8px; border-left: 6px solid {color}; background-color: rgba(128, 128, 128, 0.05); margin-bottom: 10px;">
+            <p style="margin: 0; font-size: 1.0rem; color: gray;">{title}</p>
+            <h1 style="margin: 5px 0 0 0; font-size: 2.2rem; font-weight: 700;">{value}</h1>
+        </div>
+        """
+
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric(f"💰 區間總預算 (Budget)", f"${total_budget:,.0f}")
-    kpi2.metric(f"📈 區間實際營收 (Actual)", f"${total_actual:,.0f}")
-    kpi3.metric(f"🎯 區間達成率 (%)", f"{overall_achieve_rate:.1%}")
-    kpi4.metric("💎 預期目標總毛利 (全年)", f"${total_gross_margin:,.0f}")
+    with kpi1: st.markdown(make_kpi_card("💰 區間總預算 (Budget)", f"${total_budget:,.0f}", "#3498DB"), unsafe_allow_html=True)
+    with kpi2: st.markdown(make_kpi_card("📈 區間實際營收 (Actual)", f"${total_actual:,.0f}", "#2ECC71"), unsafe_allow_html=True)
+    with kpi3: st.markdown(make_kpi_card("🎯 區間達成率 (%)", f"{overall_achieve_rate:.1%}", "#E74C3C"), unsafe_allow_html=True)
+    with kpi4: st.markdown(make_kpi_card("💎 預期總毛利 (全年 Target)", f"${total_gross_margin:,.0f}", "#F1C40F"), unsafe_allow_html=True)
 
     with st.expander("💡 點此查看指標計算邏輯與資料來源"):
         st.markdown(f"""
@@ -238,7 +248,6 @@ if uploaded_files:
     st.markdown("### 📅 月度預算與實際營收趨勢")
     
     trend_data = []
-    # 趨勢圖僅顯示篩選的月份
     for m in selected_months:
         b_col = f"{m}_預算"
         a_col = f"{m}_實際"
@@ -262,20 +271,32 @@ if uploaded_files:
         st.info("所選月份無可用資料。")
 
     # =========================================================================
-    # [區塊 4] 🏆 Top 10 貢獻專案 (改為滿版獨立呈現)
+    # [區塊 4] 🏆 Top 10 貢獻專案
     # =========================================================================
     st.divider()
     st.markdown("### 🏆 Top 10 預算貢獻專案")
+    
     if 'Total_預算' in df_filtered.columns and not df_filtered.empty:
-        df_top10 = df_filtered.nlargest(10, 'Total_預算').sort_values('Total_預算', ascending=True)
+        df_filtered['排序依據'] = df_filtered[['Total_預算', 'Total_實際']].max(axis=1)
+        df_top10 = df_filtered.nlargest(10, '排序依據').sort_values('排序依據', ascending=True)
         
         if view_option == "凱鍶+鎧鍶釩":
             df_top10['顯示專案'] = df_top10['專案'] + " (" + df_top10['公司別'] + ")"
         else:
             df_top10['顯示專案'] = df_top10['專案']
             
-        max_val = df_top10['Total_預算'].max()
-        x_limit = max_val * 1.25 if max_val > 0 else 100
+        def get_achieve_label(b, a, rate):
+            if b <= 0 and a > 0:
+                return " 🎉 額外營收 (無預算)"
+            elif b <= 0 and a <= 0:
+                return " -"
+            else:
+                return f" 達成 {rate:.0%}"
+                
+        df_top10['顯示標籤'] = df_top10.apply(lambda row: get_achieve_label(row['Total_預算'], row['Total_實際'], row['Total_達成率']), axis=1)
+            
+        max_val = df_top10['排序依據'].max()
+        x_limit = max_val * 1.35 if max_val > 0 else 100
             
         fig_bar = go.Figure()
         fig_bar.add_trace(go.Bar(
@@ -286,7 +307,7 @@ if uploaded_files:
         fig_bar.add_trace(go.Bar(
             y=df_top10['顯示專案'], x=df_top10['Total_實際'], orientation='h', 
             name='Total 實際', marker_color='#17A589', 
-            text=[f" 達成 {r:.0%}" for r in df_top10['Total_達成率']], 
+            text=df_top10['顯示標籤'], 
             textposition='outside', cliponaxis=False, hoverinfo='x+name'
         ))
         fig_bar.update_layout(
@@ -297,7 +318,7 @@ if uploaded_files:
         st.plotly_chart(fig_bar, use_container_width=True)
 
     # =========================================================================
-    # [區塊 5] 📂 產品類別佔比 (雙圓餅圖對照)
+    # [區塊 5] 📂 產品類別佔比
     # =========================================================================
     st.divider()
     st.markdown("### 📂 產品類別佔比 (預算 vs 實際)")
@@ -319,7 +340,7 @@ if uploaded_files:
             st.plotly_chart(fig_pie_a1, use_container_width=True)
 
     # =========================================================================
-    # [區塊 6] 📊 開案類別佔比 (雙圓餅圖對照)
+    # [區塊 6] 📊 開案類別佔比
     # =========================================================================
     st.divider()
     st.markdown("### 📊 開案類別佔比 (預算 vs 實際)")
