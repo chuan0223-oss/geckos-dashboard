@@ -9,7 +9,7 @@ import re
 # =========================================================================
 # ⚙️ 設定網頁標題與佈局 (Wide Mode)
 # =========================================================================
-st.set_page_config(page_title="凱鍶 財務預算戰情室 V1.92", layout="wide")
+st.set_page_config(page_title="凱鍶 財務預算戰情室 V1.96", layout="wide")
 
 # =========================================================================
 # 🔐 [資安強化] 身分驗證
@@ -46,7 +46,7 @@ def check_password():
 #     st.stop()
 
 # =========================================================================
-# ⬇️ Dashboard 主程式 (Version: V1.92)
+# ⬇️ Dashboard 主程式 (Version: V1.96)
 # =========================================================================
 st.title("📊 2026 年度預算戰情室 (Budget vs. Actual)")
 
@@ -147,7 +147,7 @@ if uploaded_files:
     
     view_option = st.sidebar.selectbox("🏢 檢視視角", options=["凱鍶+鎧鍶釩", "凱鍶", "鎧鍶釩"])
     
-    # --- 1. 月份區間篩選器 ---
+    # --- 月份區間篩選器 ---
     st.sidebar.markdown("#### 📅 月份篩選")
     col_m1, col_m2 = st.sidebar.columns(2)
     start_month = col_m1.number_input("從 (月)", min_value=1, max_value=12, value=1, step=1)
@@ -160,7 +160,7 @@ if uploaded_files:
     all_months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     selected_months = all_months[start_month-1 : end_month]
 
-    # --- 資料預過濾 ---
+    # --- 圖表用資料預過濾 (依據檢視視角) ---
     if view_option == "凱鍶":
         df_filtered = df_combined[df_combined['公司別'] == '凱鍶'].copy()
     elif view_option == "鎧鍶釩":
@@ -168,7 +168,7 @@ if uploaded_files:
     else:
         df_filtered = df_combined.copy()
 
-    # --- 2. 維度篩選器 ---
+    # --- 維度篩選器 ---
     st.sidebar.markdown("#### 📌 維度篩選")
     project_options = [x for x in df_filtered['專案'].unique() if pd.notna(x) and str(x).strip() != '']
     project_filter = st.sidebar.multiselect("🏷️ 專案", options=project_options)
@@ -183,11 +183,11 @@ if uploaded_files:
     if type_filter: df_filtered = df_filtered[df_filtered['開案類別'].isin(type_filter)]
     if cat_filter: df_filtered = df_filtered[df_filtered['產品類別'].isin(cat_filter)]
 
-    # --- 3. RMB 匯率設定 ---
+    # --- RMB 匯率設定 ---
     st.sidebar.markdown("#### 💱 匯率設定")
     rmb_rate = st.sidebar.number_input("RMB 換 TWD 匯率 (僅套用鎧鍶釩)", value=4.40, step=0.05, format="%.2f")
 
-    # --- 數值轉換與 TWD 匯率套用 ---
+    # --- (圖表用) 數值轉換與 TWD 匯率套用 ---
     base_numeric_cols = ['目標毛利', '目標銷貨成本', 'Total_預算', 'Total_實際']
     for prefix in all_months + ['Q2']: 
         base_numeric_cols.extend([f"{prefix}_預算", f"{prefix}_實際"])
@@ -198,7 +198,7 @@ if uploaded_files:
             mask_subsidiary = df_filtered['公司別'] == '鎧鍶釩'
             df_filtered.loc[mask_subsidiary, col] = df_filtered.loc[mask_subsidiary, col] * rmb_rate
 
-    # --- 動態重算 Total 欄位 (根據選擇的月份) ---
+    # --- (圖表用) 動態重算 Total 欄位 ---
     valid_b_cols = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_filtered.columns]
     valid_a_cols = [f"{m}_實際" for m in selected_months if f"{m}_實際" in df_filtered.columns]
     
@@ -206,39 +206,92 @@ if uploaded_files:
     df_filtered['Total_實際'] = df_filtered[valid_a_cols].sum(axis=1) if valid_a_cols else 0
     df_filtered['Total_達成率'] = np.where(df_filtered['Total_預算'] > 0, df_filtered['Total_實際'] / df_filtered['Total_預算'], 0)
 
+
     # =========================================================================
-    # [區塊 2] 🎯 財務戰略指標 (V1.92 適度字體版)
+    # 💎 [區塊 2] 專用獨立運算邏輯 (不受「檢視視角」影響，確保三區塊皆有數據)
+    # =========================================================================
+    df_kpi = df_combined.copy()
+    if project_filter: df_kpi = df_kpi[df_kpi['專案'].isin(project_filter)]
+    if type_filter: df_kpi = df_kpi[df_kpi['開案類別'].isin(type_filter)]
+    if cat_filter: df_kpi = df_kpi[df_kpi['產品類別'].isin(cat_filter)]
+
+    cols_to_clean = ['目標毛利'] + [f"{m}_預算" for m in selected_months] + [f"{m}_實際" for m in selected_months]
+    for col in cols_to_clean:
+        if col in df_kpi.columns:
+            df_kpi[col] = df_kpi[col].apply(clean_numeric)
+
+    kpi_valid_b = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_kpi.columns]
+    kpi_valid_a = [f"{m}_實際" for m in selected_months if f"{m}_實際" in df_kpi.columns]
+    
+    df_kpi['Total_預算'] = df_kpi[kpi_valid_b].sum(axis=1) if kpi_valid_b else 0
+    df_kpi['Total_實際'] = df_kpi[kpi_valid_a].sum(axis=1) if kpi_valid_a else 0
+
+    df_kpi_parent = df_kpi[df_kpi['公司別'] == '凱鍶']
+    df_kpi_sub = df_kpi[df_kpi['公司別'] == '鎧鍶釩']
+
+    # --- 計算 1. 凱鍶 (TWD) ---
+    parent_b = df_kpi_parent['Total_預算'].sum()
+    parent_a = df_kpi_parent['Total_實際'].sum()
+    parent_m = df_kpi_parent['目標毛利'].sum() if '目標毛利' in df_kpi_parent.columns else 0
+    parent_r = parent_a / parent_b if parent_b > 0 else 0
+
+    # --- 計算 2. 鎧鍶釩 (CNY 原幣) ---
+    sub_b_cny = df_kpi_sub['Total_預算'].sum()
+    sub_a_cny = df_kpi_sub['Total_實際'].sum()
+    sub_m_cny = df_kpi_sub['目標毛利'].sum() if '目標毛利' in df_kpi_sub.columns else 0
+    sub_r = sub_a_cny / sub_b_cny if sub_b_cny > 0 else 0
+
+    # --- 計算 3. 集團合併 (TWD，鎧鍶釩乘上匯率) ---
+    group_b = parent_b + (sub_b_cny * rmb_rate)
+    group_a = parent_a + (sub_a_cny * rmb_rate)
+    group_m = parent_m + (sub_m_cny * rmb_rate)
+    group_r = group_a / group_b if group_b > 0 else 0
+
+    # =========================================================================
+    # [區塊 2] 🎯 財務戰略指標 (V1.95 3區塊版)
     # =========================================================================
     st.divider()
-    st.markdown(f"### 🎯 財務戰略指標 ({start_month}月 ~ {end_month}月) - TWD")
+    st.markdown(f"### 🎯 財務戰略指標 ({start_month}月 ~ {end_month}月)")
     
-    total_budget = df_filtered['Total_預算'].sum()
-    total_actual = df_filtered['Total_實際'].sum()
-    total_gross_margin = df_filtered['目標毛利'].sum() if '目標毛利' in df_filtered.columns else 0
-    overall_achieve_rate = (total_actual / total_budget) if total_budget > 0 else 0
-
-    # 字體大小調整：標題 1.0rem，數字 2.2rem (比 V1.91 縮小，比 V1.9 大)
     def make_kpi_card(title, value, color="#2E86C1"):
         return f"""
-        <div style="padding: 15px; border-radius: 8px; border-left: 6px solid {color}; background-color: rgba(128, 128, 128, 0.05); margin-bottom: 10px;">
-            <p style="margin: 0; font-size: 1.0rem; color: gray;">{title}</p>
-            <h1 style="margin: 5px 0 0 0; font-size: 2.2rem; font-weight: 700;">{value}</h1>
+        <div style="padding: 10px; border-radius: 8px; border-left: 6px solid {color}; background-color: rgba(128, 128, 128, 0.05); margin-bottom: 10px;">
+            <p style="margin: 0; font-size: 0.95rem; color: gray;">{title}</p>
+            <h1 style="margin: 5px 0 0 0; font-size: 2.0rem; font-weight: 700;">{value}</h1>
         </div>
         """
 
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    with kpi1: st.markdown(make_kpi_card("💰 區間總預算 (Budget)", f"${total_budget:,.0f}", "#3498DB"), unsafe_allow_html=True)
-    with kpi2: st.markdown(make_kpi_card("📈 區間實際營收 (Actual)", f"${total_actual:,.0f}", "#2ECC71"), unsafe_allow_html=True)
-    with kpi3: st.markdown(make_kpi_card("🎯 區間達成率 (%)", f"{overall_achieve_rate:.1%}", "#E74C3C"), unsafe_allow_html=True)
-    with kpi4: st.markdown(make_kpi_card("💎 預期總毛利 (全年 Target)", f"${total_gross_margin:,.0f}", "#F1C40F"), unsafe_allow_html=True)
+    # --- 集團區塊 ---
+    st.markdown("##### 🏢 集團合併 (凱鍶 + 鎧鍶釩) - 單位：TWD")
+    kg1, kg2, kg3, kg4 = st.columns(4)
+    with kg1: st.markdown(make_kpi_card("💰 區間總預算", f"${group_b:,.0f}", "#3498DB"), unsafe_allow_html=True)
+    with kg2: st.markdown(make_kpi_card("📈 區間實際營收", f"${group_a:,.0f}", "#2ECC71"), unsafe_allow_html=True)
+    with kg3: st.markdown(make_kpi_card("🎯 區間達成率", f"{group_r:.1%}", "#E74C3C"), unsafe_allow_html=True)
+    with kg4: st.markdown(make_kpi_card("💎 預期總毛利 (全年)", f"${group_m:,.0f}", "#F1C40F"), unsafe_allow_html=True)
+
+    # --- 凱鍶區塊 ---
+    st.markdown("##### 🇹🇼 凱鍶總公司 - 單位：TWD")
+    kp1, kp2, kp3, kp4 = st.columns(4)
+    with kp1: st.markdown(make_kpi_card("💰 區間總預算", f"${parent_b:,.0f}", "#3498DB"), unsafe_allow_html=True)
+    with kp2: st.markdown(make_kpi_card("📈 區間實際營收", f"${parent_a:,.0f}", "#2ECC71"), unsafe_allow_html=True)
+    with kp3: st.markdown(make_kpi_card("🎯 區間達成率", f"{parent_r:.1%}", "#E74C3C"), unsafe_allow_html=True)
+    with kp4: st.markdown(make_kpi_card("💎 預期總毛利 (全年)", f"${parent_m:,.0f}", "#F1C40F"), unsafe_allow_html=True)
+
+    # --- 鎧鍶釩區塊 ---
+    st.markdown("##### 🇨🇳 鎧鍶釩子公司 - 單位：CNY")
+    ks1, ks2, ks3, ks4 = st.columns(4)
+    with ks1: st.markdown(make_kpi_card("💰 區間總預算", f"¥{sub_b_cny:,.0f}", "#3498DB"), unsafe_allow_html=True)
+    with ks2: st.markdown(make_kpi_card("📈 區間實際營收", f"¥{sub_a_cny:,.0f}", "#2ECC71"), unsafe_allow_html=True)
+    with ks3: st.markdown(make_kpi_card("🎯 區間達成率", f"{sub_r:.1%}", "#E74C3C"), unsafe_allow_html=True)
+    with ks4: st.markdown(make_kpi_card("💎 預期總毛利 (全年)", f"¥{sub_m_cny:,.0f}", "#F1C40F"), unsafe_allow_html=True)
 
     with st.expander("💡 點此查看指標計算邏輯與資料來源"):
         st.markdown(f"""
-        **數據轉換與計算邏輯聲明：**
-        目前檢視視角為：**{view_option}** ； 選擇月份區間：**{start_month} 月至 {end_month} 月**。
-        * **凱鍶：** 數值不進行匯率轉換。
-        * **鎧鍶釩：** 數值依設定匯率 (**1 RMB = {rmb_rate} TWD**) 轉換為新台幣。
-        * **區間預算與實際：** 僅加總側邊欄所選定月份之數值，並以此為基礎計算動態達成率。
+        **數據顯示與計算邏輯：**
+        * **宏觀指標顯示：** 上方三區塊固定顯示「集團、凱鍶、鎧鍶釩」的全貌，**不受左側「檢視視角」影響**，方便老闆隨時對比。
+        * **圖表連動：** 下方的視覺化圖表則會依據左側「檢視視角」自動切換顯示對象。
+        * **多幣別邏輯：** 凱鍶為原幣 (TWD)；鎧鍶釩為原幣 (CNY)；集團合併則將鎧鍶釩依匯率 (**1 RMB = {rmb_rate} TWD**) 轉換後相加。
+        * **區間運算：** 總預算與實際營收會動態加總所選定的月份 ({start_month}月 ~ {end_month}月)，達成率依此計算。
         """)
 
     # =========================================================================
@@ -265,7 +318,7 @@ if uploaded_files:
         fig_trend.add_trace(go.Bar(x=df_trend['Month'], y=df_trend['Actual'], name='實際 (Actual)', marker_color='#2E86C1', yaxis='y1'))
         fig_trend.add_trace(go.Scatter(x=df_trend['Month'], y=df_trend['Achieve_Rate'], name='達成率 (%)', mode='lines+markers+text', marker=dict(color='#E74C3C', size=8), line=dict(width=3, dash='dot'), text=[f"{val:.0%}" for val in df_trend['Achieve_Rate']], textposition='top center', yaxis='y2'))
 
-        fig_trend.update_layout(barmode='group', yaxis=dict(title='金額 (TWD)', showgrid=True, gridcolor='#E5E8E8'), yaxis2=dict(title='達成率', overlaying='y', side='right', tickformat='.0%', range=[0, max(1.2, df_trend['Achieve_Rate'].max() * 1.1) if not df_trend.empty else 1.2]), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=0, r=0, t=60, b=0), height=400, hovermode="x unified")
+        fig_trend.update_layout(barmode='group', yaxis=dict(title='金額', showgrid=True, gridcolor='#E5E8E8'), yaxis2=dict(title='達成率', overlaying='y', side='right', tickformat='.0%', range=[0, max(1.2, df_trend['Achieve_Rate'].max() * 1.1) if not df_trend.empty else 1.2]), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=0, r=0, t=60, b=0), height=400, hovermode="x unified")
         st.plotly_chart(fig_trend, use_container_width=True)
     else:
         st.info("所選月份無可用資料。")
@@ -311,7 +364,7 @@ if uploaded_files:
             textposition='outside', cliponaxis=False, hoverinfo='x+name'
         ))
         fig_bar.update_layout(
-            barmode='overlay', yaxis_title="專案", xaxis=dict(title="金額 (TWD)", range=[0, x_limit]), 
+            barmode='overlay', yaxis_title="專案", xaxis=dict(title="金額", range=[0, x_limit]), 
             height=450, margin=dict(l=0, r=50, t=60, b=0), 
             legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5) 
         )
@@ -330,13 +383,15 @@ if uploaded_files:
         with col_p1:
             fig_pie_b1 = px.pie(df_pie_cat, values='Total_預算', names='產品類別', hole=0.4, title='📊 預算佔比', color_discrete_sequence=px.colors.sequential.Blues_r)
             fig_pie_b1.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie_b1.update_layout(showlegend=False, margin=dict(t=50, b=0, l=0, r=0), height=350, title_x=0.5)
+            # V1.96: 增加 l 和 r margin 給 tooltip 留出空間
+            fig_pie_b1.update_layout(showlegend=False, margin=dict(t=50, b=20, l=30, r=30), height=350, title_x=0.5)
             st.plotly_chart(fig_pie_b1, use_container_width=True)
             
         with col_p2:
             fig_pie_a1 = px.pie(df_pie_cat, values='Total_實際', names='產品類別', hole=0.4, title='💰 實際營收佔比', color_discrete_sequence=px.colors.sequential.Teal_r)
             fig_pie_a1.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie_a1.update_layout(showlegend=False, margin=dict(t=50, b=0, l=0, r=0), height=350, title_x=0.5)
+            # V1.96: 增加 l 和 r margin 給 tooltip 留出空間
+            fig_pie_a1.update_layout(showlegend=False, margin=dict(t=50, b=20, l=30, r=30), height=350, title_x=0.5)
             st.plotly_chart(fig_pie_a1, use_container_width=True)
 
     # =========================================================================
@@ -352,13 +407,15 @@ if uploaded_files:
         with col_o1:
             fig_pie_b2 = px.pie(df_pie_open, values='Total_預算', names='開案類別', hole=0.4, title='📊 預算佔比', color_discrete_sequence=px.colors.sequential.Purples_r)
             fig_pie_b2.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie_b2.update_layout(showlegend=False, margin=dict(t=50, b=0, l=0, r=0), height=350, title_x=0.5)
+            # V1.96: 增加 l 和 r margin 給 tooltip 留出空間
+            fig_pie_b2.update_layout(showlegend=False, margin=dict(t=50, b=20, l=30, r=30), height=350, title_x=0.5)
             st.plotly_chart(fig_pie_b2, use_container_width=True)
             
         with col_o2:
             fig_pie_a2 = px.pie(df_pie_open, values='Total_實際', names='開案類別', hole=0.4, title='💰 實際營收佔比', color_discrete_sequence=px.colors.sequential.Oranges_r)
             fig_pie_a2.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie_a2.update_layout(showlegend=False, margin=dict(t=50, b=0, l=0, r=0), height=350, title_x=0.5)
+            # V1.96: 增加 l 和 r margin 給 tooltip 留出空間
+            fig_pie_a2.update_layout(showlegend=False, margin=dict(t=50, b=20, l=30, r=30), height=350, title_x=0.5)
             st.plotly_chart(fig_pie_a2, use_container_width=True)
 
 else:
