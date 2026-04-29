@@ -8,7 +8,7 @@ import datetime
 # =========================================================================
 # ⚙️ 設定網頁標題與佈局 (Wide Mode)
 # =========================================================================
-st.set_page_config(page_title="凱鍶 財務預算戰情室 V2.09", layout="wide")
+st.set_page_config(page_title="凱鍶 財務預算戰情室 V2.17", layout="wide")
 
 # =========================================================================
 # 🔐 [資安強化] 身分驗證
@@ -45,7 +45,7 @@ def check_password():
 #     st.stop()
 
 # =========================================================================
-# ⬇️ Dashboard 主程式 (Version: V2.09)
+# ⬇️ Dashboard 主程式 (Version: V2.17)
 # =========================================================================
 st.title("📊 2026 年度預算戰情室 (Budget vs. Actual)")
 
@@ -203,7 +203,7 @@ if uploaded_files:
     rmb_rate = st.sidebar.number_input("RMB 換 TWD 匯率 (僅套用鎧鍶釩)", value=4.60, step=0.05, format="%.2f")
 
     # =========================================================================
-    # 💎 數據轉型與基礎計算 (V2.09: 更新為預計CMR)
+    # 💎 數據轉型與基礎計算
     # =========================================================================
     cols_to_clean = ['目標邊際貢獻', '目標銷貨成本', '預計CMR', '目標成本率']
     for prefix in all_months + ['Total']: 
@@ -224,7 +224,7 @@ if uploaded_files:
                 df_fin_all[col] = df_fin_all[col].apply(clean_numeric).astype(float)
 
     # =========================================================================
-    # [區塊 2] 🎯 財務戰略指標 (V2.09: 5宮格新增預計CMR與實際CMR)
+    # [區塊 2] 🎯 財務戰略指標 
     # =========================================================================
     st.divider()
     st.markdown(f"### 🎯 財務戰略指標 ({start_month}月 ~ {end_month}月)")
@@ -248,7 +248,6 @@ if uploaded_files:
     p_bud, p_act, p_exp_margin, p_act_cost, p_has_cost = get_raw_metrics(df_proj_all[df_proj_all['公司別'] == '凱鍶'])
     s_bud, s_act, s_exp_margin, s_act_cost, s_has_cost = get_raw_metrics(df_proj_all[df_proj_all['公司別'] == '鎧鍶釩'])
 
-    # 集團加總 (鎧鍶釩乘匯率)
     g_bud = p_bud + (s_bud * rmb_rate)
     g_act = p_act + (s_act * rmb_rate)
     g_exp_margin = p_exp_margin + (s_exp_margin * rmb_rate)
@@ -321,12 +320,30 @@ if uploaded_files:
 
     v_b_cols = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_view_proj.columns]
     v_a_cols = [f"{m}_實際" for m in selected_months if f"{m}_實際" in df_view_proj.columns]
+    v_ac_cols = [f"{m}_實際成本" for m in selected_months if f"{m}_實際成本" in df_view_proj.columns]
+    
     df_view_proj['Total_預算'] = df_view_proj[v_b_cols].sum(axis=1) if v_b_cols else 0
     df_view_proj['Total_實際'] = df_view_proj[v_a_cols].sum(axis=1) if v_a_cols else 0
+    df_view_proj['Total_實際成本'] = df_view_proj[v_ac_cols].sum(axis=1) if v_ac_cols else 0
     df_view_proj['Total_達成率'] = np.where(df_view_proj['Total_預算'] > 0, df_view_proj['Total_實際'] / df_view_proj['Total_預算'], 0)
+    
+    df_view_proj['實際CMR_動態'] = np.where(df_view_proj['Total_實際'] > 0, (df_view_proj['Total_實際'] - df_view_proj['Total_實際成本']) / df_view_proj['Total_實際'], 0)
 
     # =========================================================================
-    # [區塊 3] 📅 月度專案營收趨勢
+    # 📌 預先準備 Top 10 專案名單 (供新區塊 4 與 區塊 5 使用)
+    # =========================================================================
+    if 'Total_預算' in df_view_proj.columns and not df_view_proj.empty:
+        df_view_proj['排序依據'] = df_view_proj[['Total_預算', 'Total_實際']].max(axis=1)
+        df_top10 = df_view_proj.nlargest(10, '排序依據').sort_values('排序依據', ascending=True)
+        if view_option == "凱鍶+鎧鍶釩":
+            df_top10['顯示專案'] = df_top10['專案'] + " (" + df_top10['公司別'] + ")"
+        else:
+            df_top10['顯示專案'] = df_top10['專案']
+    else:
+        df_top10 = pd.DataFrame()
+
+    # =========================================================================
+    # [區塊 3] 📅 月度專案預算與營收趨勢
     # =========================================================================
     st.divider()
     st.markdown(f"### 📅 月度專案預算與營收趨勢 - 視角：{view_option}")
@@ -353,20 +370,78 @@ if uploaded_files:
         st.plotly_chart(fig_trend, use_container_width=True)
 
     # =========================================================================
-    # [區塊 4] 🏆 Top 10 貢獻專案
+    # [區塊 4] 🎯 Top 10 專案利潤率 (CMR) 標靶圖 (自原區塊 7 移至此處)
+    # =========================================================================
+    st.divider()
+    st.markdown(f"### 🎯 Top 10 專案利潤率 (CMR) 標靶圖 - 視角：{view_option}")
+    
+    if not df_top10.empty:
+        df_cmr = df_top10.copy()
+        cmr_colors = ['#2ECC71' if act >= exp else '#E74C3C' for act, exp in zip(df_cmr['實際CMR_動態'], df_cmr['預計CMR'])]
+        
+        fig_cmr = go.Figure()
+
+        # 1. 幽靈背景條
+        fig_cmr.add_trace(go.Bar(
+            y=df_cmr['顯示專案'],
+            x=df_cmr['預計CMR'],
+            orientation='h',
+            name='預期範圍 (背景)',
+            marker_color='rgba(220, 224, 228, 0.4)', 
+            hoverinfo='none'
+        ))
+
+        # 2. 實際 CMR 表現 
+        fig_cmr.add_trace(go.Bar(
+            y=df_cmr['顯示專案'],
+            x=df_cmr['實際CMR_動態'],
+            orientation='h',
+            name='實際 CMR',
+            marker_color=cmr_colors,
+            width=0.45,
+            text=[f"<b>{val:.1%}</b>" if val != 0 else "" for val in df_cmr['實際CMR_動態']],
+            textposition='inside',          
+            insidetextanchor='end',         
+            textfont=dict(color='white', size=22), 
+            cliponaxis=False,
+            hoverinfo='x+name'
+        ))
+
+        # 3. 預計 CMR 閾值線
+        fig_cmr.add_trace(go.Scatter(
+            y=df_cmr['顯示專案'],
+            x=df_cmr['預計CMR'],
+            mode='markers',
+            name='預計 CMR (目標底線)',
+            marker=dict(symbol='line-ns', size=24, color='#2C3E50', line=dict(width=3, color='#2C3E50')), 
+            hoverinfo='x+name'
+        ))
+
+        # 4. 版面與軸線字體整體放大
+        fig_cmr.update_layout(
+            barmode='overlay', 
+            yaxis=dict(
+                title=dict(text="專案", font=dict(size=16, color='black')), 
+                tickfont=dict(size=15, color='black')
+            ),
+            xaxis=dict(
+                title=dict(text="CMR 利潤率", font=dict(size=15, color='black')), 
+                tickformat=".0%", 
+                tickfont=dict(size=14, color='black')
+            ),
+            height=600, 
+            margin=dict(l=0, r=50, t=60, b=0), 
+            legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5, font=dict(size=15)) 
+        )
+        st.plotly_chart(fig_cmr, use_container_width=True)
+
+    # =========================================================================
+    # [區塊 5] 🏆 Top 10 預算貢獻專案 (原區塊 4)
     # =========================================================================
     st.divider()
     st.markdown(f"### 🏆 Top 10 預算貢獻專案 - 視角：{view_option}")
     
-    if 'Total_預算' in df_view_proj.columns and not df_view_proj.empty:
-        df_view_proj['排序依據'] = df_view_proj[['Total_預算', 'Total_實際']].max(axis=1)
-        df_top10 = df_view_proj.nlargest(10, '排序依據').sort_values('排序依據', ascending=True)
-        
-        if view_option == "凱鍶+鎧鍶釩":
-            df_top10['顯示專案'] = df_top10['專案'] + " (" + df_top10['公司別'] + ")"
-        else:
-            df_top10['顯示專案'] = df_top10['專案']
-            
+    if not df_top10.empty:
         def get_achieve_label(b, a, rate):
             if b <= 0 and a > 0: return " 🎉 額外營收 (無預算)"
             elif b <= 0 and a <= 0: return " -"
@@ -393,7 +468,7 @@ if uploaded_files:
         st.plotly_chart(fig_bar, use_container_width=True)
 
     # =========================================================================
-    # [區塊 5] 📂 產品類別佔比
+    # [區塊 6] 📂 產品類別佔比 (原區塊 5)
     # =========================================================================
     st.divider()
     st.markdown("### 📂 產品類別佔比 (預算 vs 實際)")
@@ -413,7 +488,7 @@ if uploaded_files:
             st.plotly_chart(fig_pie_a1, use_container_width=True)
 
     # =========================================================================
-    # [區塊 6] 📊 開案類別佔比
+    # [區塊 7] 📊 開案類別佔比 (原區塊 6)
     # =========================================================================
     st.divider()
     st.markdown("### 📊 開案類別佔比 (預算 vs 實際)")
