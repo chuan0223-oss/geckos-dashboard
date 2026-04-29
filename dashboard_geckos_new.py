@@ -8,7 +8,7 @@ import datetime
 # =========================================================================
 # ⚙️ 設定網頁標題與佈局 (Wide Mode)
 # =========================================================================
-st.set_page_config(page_title="凱鍶 財務預算戰情室 V2.04", layout="wide")
+st.set_page_config(page_title="凱鍶 財務預算戰情室 V2.09", layout="wide")
 
 # =========================================================================
 # 🔐 [資安強化] 身分驗證
@@ -45,7 +45,7 @@ def check_password():
 #     st.stop()
 
 # =========================================================================
-# ⬇️ Dashboard 主程式 (Version: V2.04)
+# ⬇️ Dashboard 主程式 (Version: V2.09)
 # =========================================================================
 st.title("📊 2026 年度預算戰情室 (Budget vs. Actual)")
 
@@ -63,12 +63,19 @@ def clean_numeric(val):
 
 def clean_percent(val):
     if pd.isna(val): return 0.0
-    val_str = str(val).strip().replace('%', '').replace(',', '')
+    val_str = str(val).strip().replace(',', '')
     if val_str == '-' or val_str == '': return 0.0
-    try: return float(val_str) / 100.0
+    
+    if val_str.startswith('(') and val_str.endswith(')'):
+        val_str = '-' + val_str[1:-1]
+        
+    try: 
+        if '%' in val_str:
+            return float(val_str.replace('%', '')) / 100.0
+        return float(val_str)
     except: return 0.0
 
-FINANCIAL_KEYWORDS = ['合計', '銷貨收入', '營業收入', '銷貨成本', '營業成本', '毛利', '營業費用', '損益', '本期損益', '營業淨利', '稅前淨利', '稅後淨利']
+FINANCIAL_KEYWORDS = ['合計', '銷貨收入', '營業收入', '銷貨成本', '營業成本', '毛利', '邊際貢獻', '營業費用', '損益', '本期損益', '營業淨利', '稅前淨利', '稅後淨利']
 
 # =========================================================================
 # 📁 資料上傳與多檔合併預處理
@@ -115,6 +122,10 @@ if uploaded_files:
                         
             df_temp = df_raw.iloc[header_idx + 1:].copy()
             df_temp.columns = new_cols
+            
+            # --- 錯字自動校正防呆機制 ---
+            if 'Sep_實際成本率' in df_temp.columns and 'Sep_預算' not in df_temp.columns:
+                df_temp = df_temp.rename(columns={'Sep_實際成本率': 'Sep_預算'})
             
             if '項目' in df_temp.columns and '專案' in df_temp.columns:
                 df_temp = df_temp.rename(columns={'專案': '開案類別'})
@@ -189,76 +200,80 @@ if uploaded_files:
     if cat_filter: df_proj_all = df_proj_all[df_proj_all['產品類別'].isin(cat_filter)]
 
     st.sidebar.markdown("#### 💱 匯率設定")
-    rmb_rate = st.sidebar.number_input("RMB 換 TWD 匯率 (僅套用鎧鍶釩)", value=4.40, step=0.05, format="%.2f")
+    rmb_rate = st.sidebar.number_input("RMB 換 TWD 匯率 (僅套用鎧鍶釩)", value=4.60, step=0.05, format="%.2f")
 
     # =========================================================================
-    # 💎 數據轉型與基礎計算
+    # 💎 數據轉型與基礎計算 (V2.09: 更新為預計CMR)
     # =========================================================================
-    cols_to_clean = ['目標毛利', '目標銷貨成本', '預期毛利率'] + [f"{m}_預算" for m in selected_months] + [f"{m}_實際" for m in selected_months]
+    cols_to_clean = ['目標邊際貢獻', '目標銷貨成本', '預計CMR', '目標成本率']
+    for prefix in all_months + ['Total']: 
+        cols_to_clean.extend([f"{prefix}_預算", f"{prefix}_實際", f"{prefix}_實際成本", f"{prefix}_實際CMR"])
     
     for col in cols_to_clean:
         if col in df_proj_all.columns:
-            if col == '預期毛利率':
+            if col in ['預計CMR', '目標成本率'] or col.endswith('實際CMR'):
                 df_proj_all[col] = df_proj_all[col].apply(clean_percent).astype(float)
             else:
                 df_proj_all[col] = df_proj_all[col].apply(clean_numeric).astype(float)
                 
     for col in cols_to_clean:
         if col in df_fin_all.columns:
-            if col != '預期毛利率':
+            if col in ['預計CMR', '目標成本率'] or col.endswith('實際CMR'):
+                df_fin_all[col] = df_fin_all[col].apply(clean_percent).astype(float)
+            else:
                 df_fin_all[col] = df_fin_all[col].apply(clean_numeric).astype(float)
 
     # =========================================================================
-    # [區塊 2] 🎯 財務戰略指標 
+    # [區塊 2] 🎯 財務戰略指標 (V2.09: 5宮格新增預計CMR與實際CMR)
     # =========================================================================
     st.divider()
     st.markdown(f"### 🎯 財務戰略指標 ({start_month}月 ~ {end_month}月)")
 
-    def get_kpi_metrics(df_p, df_f):
+    def get_raw_metrics(df_p):
         b_cols = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_p.columns]
         a_cols = [f"{m}_實際" for m in selected_months if f"{m}_實際" in df_p.columns]
+        ac_cols = [f"{m}_實際成本" for m in selected_months if f"{m}_實際成本" in df_p.columns]
         
         bud = df_p[b_cols].sum().sum() if b_cols else 0
         act = df_p[a_cols].sum().sum() if a_cols else 0
+        act_cost = df_p[ac_cols].sum().sum() if ac_cols else 0
         
-        if '預期毛利率' in df_p.columns and b_cols:
-            margin = (df_p[b_cols].sum(axis=1) * df_p['預期毛利率'].fillna(0)).sum()
+        if '預計CMR' in df_p.columns and b_cols:
+            exp_margin = (df_p[b_cols].sum(axis=1) * df_p['預計CMR'].fillna(0)).sum()
         else:
-            margin = df_p['目標毛利'].sum() if '目標毛利' in df_p.columns else 0
+            exp_margin = df_p['目標邊際貢獻'].sum() if '目標邊際貢獻' in df_p.columns else 0
             
-        f_b_cols = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_f.columns]
-        f_a_cols = [f"{m}_實際" for m in selected_months if f"{m}_實際" in df_f.columns]
-        
-        df_net = df_f[df_f['專案_Clean'].isin(['損益', '本期損益', '營業淨利', '稅前淨利', '稅後淨利'])]
-        net_bud = df_net[f_b_cols].sum().sum() if f_b_cols else 0
-        net_act = df_net[f_a_cols].sum().sum() if f_a_cols else 0
-            
-        rate = act / bud if bud > 0 else 0
-        return bud, act, rate, margin, net_bud, net_act
+        return bud, act, exp_margin, act_cost, len(ac_cols) > 0
 
-    p_bud, p_act, p_rate, p_margin, p_net_bud, p_net_act = get_kpi_metrics(
-        df_proj_all[df_proj_all['公司別'] == '凱鍶'], 
-        df_fin_all[df_fin_all['公司別'] == '凱鍶']
-    )
+    p_bud, p_act, p_exp_margin, p_act_cost, p_has_cost = get_raw_metrics(df_proj_all[df_proj_all['公司別'] == '凱鍶'])
+    s_bud, s_act, s_exp_margin, s_act_cost, s_has_cost = get_raw_metrics(df_proj_all[df_proj_all['公司別'] == '鎧鍶釩'])
 
-    s_bud, s_act, s_rate, s_margin, s_net_bud, s_net_act = get_kpi_metrics(
-        df_proj_all[df_proj_all['公司別'] == '鎧鍶釩'], 
-        df_fin_all[df_fin_all['公司別'] == '鎧鍶釩']
-    )
-
+    # 集團加總 (鎧鍶釩乘匯率)
     g_bud = p_bud + (s_bud * rmb_rate)
     g_act = p_act + (s_act * rmb_rate)
-    g_margin = p_margin + (s_margin * rmb_rate)
-    g_net_bud = p_net_bud + (s_net_bud * rmb_rate)
-    g_rate = g_act / g_bud if g_bud > 0 else 0
+    g_exp_margin = p_exp_margin + (s_exp_margin * rmb_rate)
+    g_act_cost = p_act_cost + (s_act_cost * rmb_rate)
+    g_has_cost = p_has_cost or s_has_cost
 
-    def make_kpi_card(title, value, color="#2E86C1", sub_text=None):
-        sub_html = f"<div style='margin-top: 5px; font-size: 0.85rem; color: #7F8C8D; font-weight: 500;'>{sub_text}</div>" if sub_text else "<div style='margin-top: 5px; font-size: 0.85rem; color: transparent;'>-</div>"
+    def calculate_rates(bud, act, exp_margin, act_cost, has_cost):
+        rate = act / bud if bud > 0 else 0
+        exp_cmr = exp_margin / bud if bud > 0 else 0
+        if act > 0 and has_cost:
+            act_cmr = (act - act_cost) / act
+        else:
+            act_cmr = 0.0
+        return rate, exp_cmr, act_cmr
+
+    p_rate, p_exp_cmr, p_act_cmr = calculate_rates(p_bud, p_act, p_exp_margin, p_act_cost, p_has_cost)
+    s_rate, s_exp_cmr, s_act_cmr = calculate_rates(s_bud, s_act, s_exp_margin, s_act_cost, s_has_cost)
+    g_rate, g_exp_cmr, g_act_cmr = calculate_rates(g_bud, g_act, g_exp_margin, g_act_cost, g_has_cost)
+
+    def make_kpi_card(title, value, color="#2E86C1"):
         return f"""
         <div style="padding: 10px; border-radius: 8px; border-left: 6px solid {color}; background-color: rgba(128, 128, 128, 0.05); margin-bottom: 10px; display: flex; flex-direction: column; justify-content: space-between; height: 100%;">
             <p style="margin: 0; font-size: 0.9rem; color: gray;">{title}</p>
             <h1 style="margin: 5px 0 0 0; font-size: 1.8rem; font-weight: 700; color: #2C3E50;">{value}</h1>
-            {sub_html}
+            <div style='margin-top: 5px; font-size: 0.85rem; color: transparent;'>-</div>
         </div>
         """
 
@@ -267,53 +282,48 @@ if uploaded_files:
     with kg1: st.markdown(make_kpi_card("💰 區間總預算", f"${g_bud:,.0f}", "#3498DB"), unsafe_allow_html=True)
     with kg2: st.markdown(make_kpi_card("📈 區間實際營收", f"${g_act:,.0f}", "#2ECC71"), unsafe_allow_html=True)
     with kg3: st.markdown(make_kpi_card("🎯 區間達成率", f"{g_rate:.1%}", "#E74C3C"), unsafe_allow_html=True)
-    with kg4: st.markdown(make_kpi_card("💎 預期目標毛利", f"${g_margin:,.0f}", "#F1C40F"), unsafe_allow_html=True)
-    with kg5: st.markdown(make_kpi_card("🏦 損益", f"${g_net_bud:,.0f}", "#9B59B6" if g_net_bud>=0 else "#E74C3C"), unsafe_allow_html=True)
+    with kg4: st.markdown(make_kpi_card("📌 預計 CMR", f"{g_exp_cmr:.1%}", "#F39C12"), unsafe_allow_html=True)
+    with kg5: st.markdown(make_kpi_card("📊 實際 CMR", f"{g_act_cmr:.1%}", "#9B59B6"), unsafe_allow_html=True)
 
     st.markdown("##### 🇹🇼 凱鍶總公司 - 單位：TWD")
     kp1, kp2, kp3, kp4, kp5 = st.columns(5)
     with kp1: st.markdown(make_kpi_card("💰 區間總預算", f"${p_bud:,.0f}", "#3498DB"), unsafe_allow_html=True)
     with kp2: st.markdown(make_kpi_card("📈 區間實際營收", f"${p_act:,.0f}", "#2ECC71"), unsafe_allow_html=True)
     with kp3: st.markdown(make_kpi_card("🎯 區間達成率", f"{p_rate:.1%}", "#E74C3C"), unsafe_allow_html=True)
-    with kp4: st.markdown(make_kpi_card("💎 預期目標毛利", f"${p_margin:,.0f}", "#F1C40F"), unsafe_allow_html=True)
-    with kp5: st.markdown(make_kpi_card("🏦 損益", f"${p_net_bud:,.0f}", "#9B59B6" if p_net_bud>=0 else "#E74C3C"), unsafe_allow_html=True)
+    with kp4: st.markdown(make_kpi_card("📌 預計 CMR", f"{p_exp_cmr:.1%}", "#F39C12"), unsafe_allow_html=True)
+    with kp5: st.markdown(make_kpi_card("📊 實際 CMR", f"{p_act_cmr:.1%}", "#9B59B6"), unsafe_allow_html=True)
 
     st.markdown("##### 🇨🇳 鎧鍶釩子公司 - 單位：CNY")
     ks1, ks2, ks3, ks4, ks5 = st.columns(5)
     with ks1: st.markdown(make_kpi_card("💰 區間總預算", f"¥{s_bud:,.0f}", "#3498DB"), unsafe_allow_html=True)
     with ks2: st.markdown(make_kpi_card("📈 區間實際營收", f"¥{s_act:,.0f}", "#2ECC71"), unsafe_allow_html=True)
     with ks3: st.markdown(make_kpi_card("🎯 區間達成率", f"{s_rate:.1%}", "#E74C3C"), unsafe_allow_html=True)
-    with ks4: st.markdown(make_kpi_card("💎 預期目標毛利", f"¥{s_margin:,.0f}", "#F1C40F"), unsafe_allow_html=True)
-    with ks5: st.markdown(make_kpi_card("🏦 損益", f"¥{s_net_bud:,.0f}", "#9B59B6" if s_net_bud>=0 else "#E74C3C"), unsafe_allow_html=True)
+    with ks4: st.markdown(make_kpi_card("📌 預計 CMR", f"{s_exp_cmr:.1%}", "#F39C12"), unsafe_allow_html=True)
+    with ks5: st.markdown(make_kpi_card("📊 實際 CMR", f"{s_act_cmr:.1%}", "#9B59B6"), unsafe_allow_html=True)
 
     # =========================================================================
     # 🔀 圖表資料準備 (依照檢視視角動態轉換幣別)
     # =========================================================================
     if view_option == "凱鍶":
         df_view_proj = df_proj_all[df_proj_all['公司別'] == '凱鍶'].copy()
-        df_view_fin = df_fin_all[df_fin_all['公司別'] == '凱鍶'].copy()
         curr_sym = "TWD"
     elif view_option == "鎧鍶釩":
         df_view_proj = df_proj_all[df_proj_all['公司別'] == '鎧鍶釩'].copy()
-        df_view_fin = df_fin_all[df_fin_all['公司別'] == '鎧鍶釩'].copy()
         curr_sym = "CNY"
     else:
         df_view_proj = df_proj_all.copy()
-        df_view_fin = df_fin_all.copy()
         curr_sym = "TWD"
-        for df_tgt in [df_view_proj, df_view_fin]:
-            mask_sub = df_tgt['公司別'] == '鎧鍶釩'
-            if mask_sub.any():
-                for col in cols_to_clean:
-                    if col != '預期毛利率' and col in df_tgt.columns:
-                        df_tgt.loc[mask_sub, col] = df_tgt.loc[mask_sub, col] * float(rmb_rate)
+        mask_sub = df_view_proj['公司別'] == '鎧鍶釩'
+        if mask_sub.any():
+            for col in cols_to_clean:
+                if col not in ['預計CMR', '目標成本率'] and not col.endswith('實際CMR') and col in df_view_proj.columns:
+                    df_view_proj.loc[mask_sub, col] = df_view_proj.loc[mask_sub, col] * float(rmb_rate)
 
-    for df_tgt in [df_view_proj, df_view_fin]:
-        v_b_cols = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_tgt.columns]
-        v_a_cols = [f"{m}_實際" for m in selected_months if f"{m}_實際" in df_tgt.columns]
-        df_tgt['Total_預算'] = df_tgt[v_b_cols].sum(axis=1) if v_b_cols else 0
-        df_tgt['Total_實際'] = df_tgt[v_a_cols].sum(axis=1) if v_a_cols else 0
-        df_tgt['Total_達成率'] = np.where(df_tgt['Total_預算'] > 0, df_tgt['Total_實際'] / df_tgt['Total_預算'], 0)
+    v_b_cols = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_view_proj.columns]
+    v_a_cols = [f"{m}_實際" for m in selected_months if f"{m}_實際" in df_view_proj.columns]
+    df_view_proj['Total_預算'] = df_view_proj[v_b_cols].sum(axis=1) if v_b_cols else 0
+    df_view_proj['Total_實際'] = df_view_proj[v_a_cols].sum(axis=1) if v_a_cols else 0
+    df_view_proj['Total_達成率'] = np.where(df_view_proj['Total_預算'] > 0, df_view_proj['Total_實際'] / df_view_proj['Total_預算'], 0)
 
     # =========================================================================
     # [區塊 3] 📅 月度專案營收趨勢
