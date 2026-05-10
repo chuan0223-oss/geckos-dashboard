@@ -4,11 +4,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 import datetime
+import re
 
 # =========================================================================
 # ⚙️ 設定網頁標題與佈局 (Wide Mode)
 # =========================================================================
-st.set_page_config(page_title="凱鍶 財務預算戰情室 V2.17", layout="wide")
+st.set_page_config(page_title="凱鍶 財務預算戰情室 V2.22", layout="wide")
 
 # =========================================================================
 # 🔐 [資安強化] 身分驗證
@@ -45,14 +46,14 @@ def check_password():
 #     st.stop()
 
 # =========================================================================
-# ⬇️ Dashboard 主程式 (Version: V2.17)
+# ⬇️ Dashboard 主程式 (Version: V2.22 - 名稱精確校正版)
 # =========================================================================
 st.title("📊 2026 年度預算戰情室 (Budget vs. Actual)")
 
-# --- 支援會計括號代表負數 ---
+# --- 終極數字清洗器 ---
 def clean_numeric(val):
     if pd.isna(val): return 0.0
-    val_str = str(val).strip().replace(',', '')
+    val_str = re.sub(r'[\s,]', '', str(val))
     if val_str == '-' or val_str == '': return 0.0
     
     if val_str.startswith('(') and val_str.endswith(')'):
@@ -63,7 +64,7 @@ def clean_numeric(val):
 
 def clean_percent(val):
     if pd.isna(val): return 0.0
-    val_str = str(val).strip().replace(',', '')
+    val_str = re.sub(r'[\s,]', '', str(val))
     if val_str == '-' or val_str == '': return 0.0
     
     if val_str.startswith('(') and val_str.endswith(')'):
@@ -76,6 +77,13 @@ def clean_percent(val):
     except: return 0.0
 
 FINANCIAL_KEYWORDS = ['合計', '銷貨收入', '營業收入', '銷貨成本', '營業成本', '毛利', '邊際貢獻', '營業費用', '損益', '本期損益', '營業淨利', '稅前淨利', '稅後淨利']
+
+def is_financial_row(proj_name):
+    """ 智慧關鍵字雷達 """
+    for kw in FINANCIAL_KEYWORDS:
+        if kw in proj_name:
+            return True
+    return False
 
 # =========================================================================
 # 📁 資料上傳與多檔合併預處理
@@ -123,7 +131,6 @@ if uploaded_files:
             df_temp = df_raw.iloc[header_idx + 1:].copy()
             df_temp.columns = new_cols
             
-            # --- 錯字自動校正防呆機制 ---
             if 'Sep_實際成本率' in df_temp.columns and 'Sep_預算' not in df_temp.columns:
                 df_temp = df_temp.rename(columns={'Sep_實際成本率': 'Sep_預算'})
             
@@ -140,7 +147,7 @@ if uploaded_files:
                 df_temp = df_temp.rename(columns=rename_dict)
                 
             df_temp = df_temp.dropna(subset=['專案'])
-            df_temp = df_temp[df_temp['專案'].astype(str).str.strip() != '']
+            df_temp['專案'] = df_temp['專案'].astype(str).str.strip()
             
             if "鎧鍶釩" in file.name:
                 df_temp['公司別'] = '鎧鍶釩'
@@ -160,10 +167,11 @@ if uploaded_files:
         
     df_combined = pd.concat(df_list, ignore_index=True)
 
-    # 🔹 拆分「專案池」與「財務池」
     df_combined['專案_Clean'] = df_combined['專案'].astype(str).str.strip()
-    df_proj_all = df_combined[~df_combined['專案_Clean'].isin(FINANCIAL_KEYWORDS)].copy()
-    df_fin_all = df_combined[df_combined['專案_Clean'].isin(FINANCIAL_KEYWORDS)].copy()
+    mask_financial = df_combined['專案_Clean'].apply(is_financial_row)
+    
+    df_proj_all = df_combined[~mask_financial].copy()
+    df_fin_all = df_combined[mask_financial].copy()
 
     # =========================================================================
     # [區塊 1] 篩選條件設定
@@ -205,20 +213,20 @@ if uploaded_files:
     # =========================================================================
     # 💎 數據轉型與基礎計算
     # =========================================================================
-    cols_to_clean = ['目標邊際貢獻', '目標銷貨成本', '預計CMR', '目標成本率']
+    cols_to_clean = ['目標邊際貢獻', '目標銷貨成本', '目標成本率']
     for prefix in all_months + ['Total']: 
         cols_to_clean.extend([f"{prefix}_預算", f"{prefix}_實際", f"{prefix}_實際成本", f"{prefix}_實際CMR"])
     
     for col in cols_to_clean:
         if col in df_proj_all.columns:
-            if col in ['預計CMR', '目標成本率'] or col.endswith('實際CMR'):
+            if col in ['目標成本率'] or col.endswith('實際CMR'):
                 df_proj_all[col] = df_proj_all[col].apply(clean_percent).astype(float)
             else:
                 df_proj_all[col] = df_proj_all[col].apply(clean_numeric).astype(float)
                 
     for col in cols_to_clean:
         if col in df_fin_all.columns:
-            if col in ['預計CMR', '目標成本率'] or col.endswith('實際CMR'):
+            if col in ['目標成本率'] or col.endswith('實際CMR'):
                 df_fin_all[col] = df_fin_all[col].apply(clean_percent).astype(float)
             else:
                 df_fin_all[col] = df_fin_all[col].apply(clean_numeric).astype(float)
@@ -237,35 +245,32 @@ if uploaded_files:
         bud = df_p[b_cols].sum().sum() if b_cols else 0
         act = df_p[a_cols].sum().sum() if a_cols else 0
         act_cost = df_p[ac_cols].sum().sum() if ac_cols else 0
-        
-        if '預計CMR' in df_p.columns and b_cols:
-            exp_margin = (df_p[b_cols].sum(axis=1) * df_p['預計CMR'].fillna(0)).sum()
-        else:
-            exp_margin = df_p['目標邊際貢獻'].sum() if '目標邊際貢獻' in df_p.columns else 0
             
-        return bud, act, exp_margin, act_cost, len(ac_cols) > 0
+        return bud, act, act_cost, len(ac_cols) > 0
 
-    p_bud, p_act, p_exp_margin, p_act_cost, p_has_cost = get_raw_metrics(df_proj_all[df_proj_all['公司別'] == '凱鍶'])
-    s_bud, s_act, s_exp_margin, s_act_cost, s_has_cost = get_raw_metrics(df_proj_all[df_proj_all['公司別'] == '鎧鍶釩'])
+    p_bud, p_act, p_act_cost, p_has_cost = get_raw_metrics(df_proj_all[df_proj_all['公司別'] == '凱鍶'])
+    s_bud, s_act, s_act_cost, s_has_cost = get_raw_metrics(df_proj_all[df_proj_all['公司別'] == '鎧鍶釩'])
 
     g_bud = p_bud + (s_bud * rmb_rate)
     g_act = p_act + (s_act * rmb_rate)
-    g_exp_margin = p_exp_margin + (s_exp_margin * rmb_rate)
     g_act_cost = p_act_cost + (s_act_cost * rmb_rate)
     g_has_cost = p_has_cost or s_has_cost
 
-    def calculate_rates(bud, act, exp_margin, act_cost, has_cost):
+    def calculate_rates(bud, act, act_cost, has_cost):
         rate = act / bud if bud > 0 else 0
-        exp_cmr = exp_margin / bud if bud > 0 else 0
         if act > 0 and has_cost:
             act_cmr = (act - act_cost) / act
         else:
             act_cmr = 0.0
-        return rate, exp_cmr, act_cmr
+        return rate, act_cmr
 
-    p_rate, p_exp_cmr, p_act_cmr = calculate_rates(p_bud, p_act, p_exp_margin, p_act_cost, p_has_cost)
-    s_rate, s_exp_cmr, s_act_cmr = calculate_rates(s_bud, s_act, s_exp_margin, s_act_cost, s_has_cost)
-    g_rate, g_exp_cmr, g_act_cmr = calculate_rates(g_bud, g_act, g_exp_margin, g_act_cost, g_has_cost)
+    p_rate, p_act_cmr = calculate_rates(p_bud, p_act, p_act_cost, p_has_cost)
+    s_rate, s_act_cmr = calculate_rates(s_bud, s_act, s_act_cost, s_has_cost)
+    g_rate, g_act_cmr = calculate_rates(g_bud, g_act, g_act_cost, g_has_cost)
+
+    # 固定的公司目標 CMR
+    p_target_cmr = 0.40  # 凱鍶 40%
+    s_target_cmr = 0.10  # 鎧鍶釩 10%
 
     def make_kpi_card(title, value, color="#2E86C1"):
         return f"""
@@ -277,19 +282,18 @@ if uploaded_files:
         """
 
     st.markdown("##### 🏢 集團合併 (凱鍶 + 鎧鍶釩) - 單位：TWD")
-    kg1, kg2, kg3, kg4, kg5 = st.columns(5)
+    kg1, kg2, kg3, kg4 = st.columns(4)
     with kg1: st.markdown(make_kpi_card("💰 區間總預算", f"${g_bud:,.0f}", "#3498DB"), unsafe_allow_html=True)
     with kg2: st.markdown(make_kpi_card("📈 區間實際營收", f"${g_act:,.0f}", "#2ECC71"), unsafe_allow_html=True)
     with kg3: st.markdown(make_kpi_card("🎯 區間達成率", f"{g_rate:.1%}", "#E74C3C"), unsafe_allow_html=True)
-    with kg4: st.markdown(make_kpi_card("📌 預計 CMR", f"{g_exp_cmr:.1%}", "#F39C12"), unsafe_allow_html=True)
-    with kg5: st.markdown(make_kpi_card("📊 實際 CMR", f"{g_act_cmr:.1%}", "#9B59B6"), unsafe_allow_html=True)
+    with kg4: st.markdown(make_kpi_card("📊 實際 CMR", f"{g_act_cmr:.1%}", "#9B59B6"), unsafe_allow_html=True)
 
     st.markdown("##### 🇹🇼 凱鍶總公司 - 單位：TWD")
     kp1, kp2, kp3, kp4, kp5 = st.columns(5)
     with kp1: st.markdown(make_kpi_card("💰 區間總預算", f"${p_bud:,.0f}", "#3498DB"), unsafe_allow_html=True)
     with kp2: st.markdown(make_kpi_card("📈 區間實際營收", f"${p_act:,.0f}", "#2ECC71"), unsafe_allow_html=True)
     with kp3: st.markdown(make_kpi_card("🎯 區間達成率", f"{p_rate:.1%}", "#E74C3C"), unsafe_allow_html=True)
-    with kp4: st.markdown(make_kpi_card("📌 預計 CMR", f"{p_exp_cmr:.1%}", "#F39C12"), unsafe_allow_html=True)
+    with kp4: st.markdown(make_kpi_card("🎯 目標 CMR", f"{p_target_cmr:.1%}", "#F39C12"), unsafe_allow_html=True)
     with kp5: st.markdown(make_kpi_card("📊 實際 CMR", f"{p_act_cmr:.1%}", "#9B59B6"), unsafe_allow_html=True)
 
     st.markdown("##### 🇨🇳 鎧鍶釩子公司 - 單位：CNY")
@@ -297,7 +301,7 @@ if uploaded_files:
     with ks1: st.markdown(make_kpi_card("💰 區間總預算", f"¥{s_bud:,.0f}", "#3498DB"), unsafe_allow_html=True)
     with ks2: st.markdown(make_kpi_card("📈 區間實際營收", f"¥{s_act:,.0f}", "#2ECC71"), unsafe_allow_html=True)
     with ks3: st.markdown(make_kpi_card("🎯 區間達成率", f"{s_rate:.1%}", "#E74C3C"), unsafe_allow_html=True)
-    with ks4: st.markdown(make_kpi_card("📌 預計 CMR", f"{s_exp_cmr:.1%}", "#F39C12"), unsafe_allow_html=True)
+    with ks4: st.markdown(make_kpi_card("🎯 目標 CMR", f"{s_target_cmr:.1%}", "#F39C12"), unsafe_allow_html=True)
     with ks5: st.markdown(make_kpi_card("📊 實際 CMR", f"{s_act_cmr:.1%}", "#9B59B6"), unsafe_allow_html=True)
 
     # =========================================================================
@@ -315,7 +319,7 @@ if uploaded_files:
         mask_sub = df_view_proj['公司別'] == '鎧鍶釩'
         if mask_sub.any():
             for col in cols_to_clean:
-                if col not in ['預計CMR', '目標成本率'] and not col.endswith('實際CMR') and col in df_view_proj.columns:
+                if col not in ['目標成本率'] and not col.endswith('實際CMR') and col in df_view_proj.columns:
                     df_view_proj.loc[mask_sub, col] = df_view_proj.loc[mask_sub, col] * float(rmb_rate)
 
     v_b_cols = [f"{m}_預算" for m in selected_months if f"{m}_預算" in df_view_proj.columns]
@@ -330,7 +334,7 @@ if uploaded_files:
     df_view_proj['實際CMR_動態'] = np.where(df_view_proj['Total_實際'] > 0, (df_view_proj['Total_實際'] - df_view_proj['Total_實際成本']) / df_view_proj['Total_實際'], 0)
 
     # =========================================================================
-    # 📌 預先準備 Top 10 專案名單 (供新區塊 4 與 區塊 5 使用)
+    # 📌 預先準備 Top 10 專案名單 
     # =========================================================================
     if 'Total_預算' in df_view_proj.columns and not df_view_proj.empty:
         df_view_proj['排序依據'] = df_view_proj[['Total_預算', 'Total_實際']].max(axis=1)
@@ -339,6 +343,9 @@ if uploaded_files:
             df_top10['顯示專案'] = df_top10['專案'] + " (" + df_top10['公司別'] + ")"
         else:
             df_top10['顯示專案'] = df_top10['專案']
+            
+        # 寫入固定的公司目標 CMR 供圖表使用
+        df_top10['目標CMR'] = np.where(df_top10['公司別'] == '凱鍶', p_target_cmr, np.where(df_top10['公司別'] == '鎧鍶釩', s_target_cmr, 0))
     else:
         df_top10 = pd.DataFrame()
 
@@ -370,73 +377,47 @@ if uploaded_files:
         st.plotly_chart(fig_trend, use_container_width=True)
 
     # =========================================================================
-    # [區塊 4] 🎯 Top 10 專案利潤率 (CMR) 標靶圖 (自原區塊 7 移至此處)
+    # [區塊 4] 🎯 Top 10目標邊際貢獻率(CMR)標靶圖 
     # =========================================================================
     st.divider()
-    st.markdown(f"### 🎯 Top 10 專案利潤率 (CMR) 標靶圖 - 視角：{view_option}")
+    st.markdown(f"### 🎯 Top 10目標邊際貢獻率(CMR)標靶圖 - 視角：{view_option}")
     
     if not df_top10.empty:
         df_cmr = df_top10.copy()
-        cmr_colors = ['#2ECC71' if act >= exp else '#E74C3C' for act, exp in zip(df_cmr['實際CMR_動態'], df_cmr['預計CMR'])]
+        cmr_colors = ['#2ECC71' if act >= exp else '#E74C3C' for act, exp in zip(df_cmr['實際CMR_動態'], df_cmr['目標CMR'])]
         
         fig_cmr = go.Figure()
 
-        # 1. 幽靈背景條
         fig_cmr.add_trace(go.Bar(
-            y=df_cmr['顯示專案'],
-            x=df_cmr['預計CMR'],
-            orientation='h',
-            name='預期範圍 (背景)',
-            marker_color='rgba(220, 224, 228, 0.4)', 
-            hoverinfo='none'
+            y=df_cmr['顯示專案'], x=df_cmr['目標CMR'], orientation='h', name='目標範圍 (背景)',
+            marker_color='rgba(220, 224, 228, 0.4)', hoverinfo='none'
         ))
 
-        # 2. 實際 CMR 表現 
         fig_cmr.add_trace(go.Bar(
-            y=df_cmr['顯示專案'],
-            x=df_cmr['實際CMR_動態'],
-            orientation='h',
-            name='實際 CMR',
-            marker_color=cmr_colors,
-            width=0.45,
+            y=df_cmr['顯示專案'], x=df_cmr['實際CMR_動態'], orientation='h', name='實際 CMR',
+            marker_color=cmr_colors, width=0.45,
             text=[f"<b>{val:.1%}</b>" if val != 0 else "" for val in df_cmr['實際CMR_動態']],
-            textposition='inside',          
-            insidetextanchor='end',         
-            textfont=dict(color='white', size=22), 
-            cliponaxis=False,
-            hoverinfo='x+name'
+            textposition='inside', insidetextanchor='end',         
+            textfont=dict(color='white', size=22), cliponaxis=False, hoverinfo='x+name'
         ))
 
-        # 3. 預計 CMR 閾值線
         fig_cmr.add_trace(go.Scatter(
-            y=df_cmr['顯示專案'],
-            x=df_cmr['預計CMR'],
-            mode='markers',
-            name='預計 CMR (目標底線)',
+            y=df_cmr['顯示專案'], x=df_cmr['目標CMR'], mode='markers', name='目標 CMR (底線)',
             marker=dict(symbol='line-ns', size=24, color='#2C3E50', line=dict(width=3, color='#2C3E50')), 
             hoverinfo='x+name'
         ))
 
-        # 4. 版面與軸線字體整體放大
         fig_cmr.update_layout(
             barmode='overlay', 
-            yaxis=dict(
-                title=dict(text="專案", font=dict(size=16, color='black')), 
-                tickfont=dict(size=15, color='black')
-            ),
-            xaxis=dict(
-                title=dict(text="CMR 利潤率", font=dict(size=15, color='black')), 
-                tickformat=".0%", 
-                tickfont=dict(size=14, color='black')
-            ),
-            height=600, 
-            margin=dict(l=0, r=50, t=60, b=0), 
+            yaxis=dict(title=dict(text="專案", font=dict(size=16, color='black')), tickfont=dict(size=15, color='black')),
+            xaxis=dict(title=dict(text="CMR 邊際貢獻率", font=dict(size=15, color='black')), tickformat=".0%", tickfont=dict(size=14, color='black')),
+            height=600, margin=dict(l=0, r=50, t=60, b=0), 
             legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5, font=dict(size=15)) 
         )
         st.plotly_chart(fig_cmr, use_container_width=True)
 
     # =========================================================================
-    # [區塊 5] 🏆 Top 10 預算貢獻專案 (原區塊 4)
+    # [區塊 5] 🏆 Top 10 預算貢獻專案 
     # =========================================================================
     st.divider()
     st.markdown(f"### 🏆 Top 10 預算貢獻專案 - 視角：{view_option}")
@@ -468,7 +449,7 @@ if uploaded_files:
         st.plotly_chart(fig_bar, use_container_width=True)
 
     # =========================================================================
-    # [區塊 6] 📂 產品類別佔比 (原區塊 5)
+    # [區塊 6] 📂 產品類別佔比 
     # =========================================================================
     st.divider()
     st.markdown("### 📂 產品類別佔比 (預算 vs 實際)")
@@ -488,7 +469,7 @@ if uploaded_files:
             st.plotly_chart(fig_pie_a1, use_container_width=True)
 
     # =========================================================================
-    # [區塊 7] 📊 開案類別佔比 (原區塊 6)
+    # [區塊 7] 📊 開案類別佔比 
     # =========================================================================
     st.divider()
     st.markdown("### 📊 開案類別佔比 (預算 vs 實際)")
