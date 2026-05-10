@@ -380,7 +380,7 @@ if uploaded_files:
     # [區塊 4] 🎯 Top 10目標邊際貢獻率(CMR)標靶圖 
     # =========================================================================
     st.divider()
-    st.markdown(f"### 🎯 Top 10目標邊際貢獻率(CMR)標靶圖 - 視角：{view_option}")
+    st.markdown(f"### 🎯 Top 10邊際貢獻率(CMR)標靶圖 - 視角：{view_option}")
     
     if not df_top10.empty:
         df_cmr = df_top10.copy()
