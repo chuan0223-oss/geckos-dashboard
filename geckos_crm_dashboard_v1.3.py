@@ -6,12 +6,12 @@ import plotly.graph_objects as go
 # =========================================================================
 # ⚙️ 網頁初始化與佈局設定
 # =========================================================================
-st.set_page_config(page_title="Geckos CRM Dashboard", layout="wide")
+st.set_page_config(page_title="Geckos Customer Dashboard", layout="wide")
 
 # =========================================================================
 # ⬇️ 核心數據載入與清洗處理
 # =========================================================================
-st.title("📊 Geckos CRM 戰情室 (V1.3 - 修正資料關聯膨脹)")
+st.title("📊 Geckos Customer Dashboard")
 
 # 檔案上傳保留於側邊欄
 st.sidebar.header("📂 資料管理中心")
@@ -36,11 +36,10 @@ if uploaded_file is not None:
         df_client['客戶'] = df_client['客戶'].ffill()
         df_client['產業類別'] = df_client['產業類別'].ffill()
         
-        # 🔥【V1.3 重要修正】在關聯前，先將客戶列表依據「客戶+產品名稱」進行去重
         # 避免因為一個客戶同個產品有多行備註，導致主表 Merge 時營收翻倍
         df_client_clean = df_client[['客戶', '產品名稱', '產業類別', '應用類別']].drop_duplicates(subset=['客戶', '產品名稱'], keep='first')
         
-        # 依據架構共識，排除忽略之非必要統計欄位
+        # 排除忽略之非必要統計欄位
         cols_to_drop = ['Lot No.', '數量', '單位']
         df_tracking = df_tracking.drop(columns=[c for c in cols_to_drop if c in df_tracking.columns], errors='ignore')
 
@@ -60,9 +59,10 @@ if uploaded_file is not None:
             how='left'
         )
 
-        # 數值與時間欄位格式標準化
+        # 🔥【V1.6 時間精度修正】數值與時間欄位格式標準化
         df_main['送樣或出貨日期'] = pd.to_datetime(df_main['送樣或出貨日期'], errors='coerce')
-        df_main['送樣月份'] = df_main['送樣或出貨日期'].dt.to_period('M').astype(str)
+        # 改用 strftime('%Y-%m') 強制排除時分秒與毫秒殘留，確保 X 軸標籤純淨
+        df_main['送樣月份'] = df_main['送樣或出貨日期'].dt.strftime('%Y-%m')
         df_main['營收'] = pd.to_numeric(df_main['營收'], errors='coerce').fillna(0)
         
         # 填補未歸類字串，避免前端篩選器顯示錯誤
@@ -76,10 +76,10 @@ if uploaded_file is not None:
         st.stop()
 
     # =========================================================================
-    # 🧩 [區塊 1] 橫向多維度篩選器
+    # 🧩 【第一列】區塊 1：篩選條件
     # =========================================================================
     with st.container(border=True):
-        st.markdown("##### 🔍 橫向多元關鍵指標篩選控制台")
+        st.markdown("##### 🔍 篩選條件")
         
         filter_row1_col1, filter_row1_col2, filter_row1_col3 = st.columns(3)
         filter_row2_col1, filter_row2_col2, filter_row2_col3 = st.columns(3)
@@ -110,67 +110,68 @@ if uploaded_file is not None:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # =========================================================================
-    # 📊 數據視覺化圖表配置排列
+    # 📊 【第二列】區塊 2：產品送樣次數與時程統計 (獨佔滿版)
     # =========================================================================
-    
-    graph_col_left, graph_col_right = st.columns([1.2, 1])
+    st.subheader("📦 產品送樣次數與時程統計")
+    df_sample = df_filtered[df_filtered['出樣/出貨'] == '出樣']
+    if not df_sample.empty:
+        df_sample_agg = df_sample.groupby(['客戶', '產品名稱']).agg(
+            送樣次數=('單號', 'count'),
+            最後送樣月份=('送樣月份', 'max')
+        ).reset_index()
+        
+        df_sample_agg['圖表標籤'] = df_sample_agg['送樣次數'].astype(str) + "次 (" + df_sample_agg['最後送樣月份'] + ")"
 
-    # [區塊 2] 送樣次數統計圖表 (長條圖)
-    with graph_col_left:
-        st.subheader("📦 產品送樣次數與最新時程統計")
-        df_sample = df_filtered[df_filtered['出樣/出貨'] == '出樣']
-        if not df_sample.empty:
-            df_sample_agg = df_sample.groupby(['客戶', '產品名稱']).agg(
-                送樣次數=('單號', 'count'),
-                最後送樣月份=('送樣月份', 'max')
-            ).reset_index()
-            
-            df_sample_agg['圖表標籤'] = df_sample_agg['送樣次數'].astype(str) + "次 (" + df_sample_agg['最後送樣月份'] + ")"
-
-            fig2 = px.bar(
-                df_sample_agg, 
-                x='客戶', 
-                y='送樣次數', 
-                color='產品名稱',
-                text='圖表標籤',
-                hover_data=['最後送樣月份'],
-                barmode='group',
-                color_discrete_sequence=px.colors.qualitative.Safe
-            )
-            fig2.update_traces(textposition='outside', textfont_size=11)
-            fig2.update_layout(margin=dict(t=20, b=10), height=380, xaxis_title="客戶名稱", yaxis_title="送樣累計次數")
-            st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("💡 當前篩選條件下無任何『出樣』紀錄。")
-
-    # [區塊 4] 客戶 TOP10 (依照營收排名)
-    with graph_col_right:
-        st.subheader("🏆 客戶營收贡献度 TOP 10")
-        df_rev_client = df_filtered.groupby('客戶')['營收'].sum().reset_index()
-        df_rev_client = df_rev_client[df_rev_client['營收'] > 0].nlargest(10, '營收').sort_values('營收', ascending=True)
-
-        if not df_rev_client.empty:
-            fig4 = px.bar(
-                df_rev_client, 
-                x='營收', 
-                y='客戶', 
-                orientation='h',
-                text='營收',
-                color='營收',
-                color_continuous_scale='GnBu'
-            )
-            fig4.update_traces(texttemplate='%{text:,.0f} TWD', textposition='outside', textfont_size=11)
-            fig4.update_layout(margin=dict(t=20, b=10), height=380, showlegend=False, xaxis_title="累計營收金額", yaxis_title="客戶名稱")
-            st.plotly_chart(fig4, use_container_width=True)
-        else:
-            st.info("💡 當前篩選條件下尚無產生實際營收之客戶。")
+        fig2 = px.bar(
+            df_sample_agg, 
+            x='客戶', 
+            y='送樣次數', 
+            color='產品名稱',
+            text='圖表標籤',
+            hover_data=['最後送樣月份'],
+            barmode='group',
+            color_discrete_sequence=px.colors.qualitative.Safe
+        )
+        fig2.update_traces(textposition='outside', textfont_size=11)
+        fig2.update_layout(margin=dict(t=25, b=10), height=400, xaxis_title="客戶名稱", yaxis_title="送樣累計次數")
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("💡 當前篩選條件下無任何『出樣』紀錄。")
 
     st.divider()
 
-    # [區塊 3] 累積營收圖表 (堆疊面積圖)
+    # =========================================================================
+    # 📊 【第三列】區塊 3：客戶營收貢獻度 TOP 10
+    # =========================================================================
+    st.subheader("🏆 客戶營收貢獻度 TOP 10")
+    df_rev_client = df_filtered.groupby('客戶')['營收'].sum().reset_index()
+    df_rev_client = df_rev_client[df_rev_client['營收'] > 0].nlargest(10, '營收').sort_values('營收', ascending=True)
+
+    if not df_rev_client.empty:
+        fig4 = px.bar(
+            df_rev_client, 
+            x='營收', 
+            y='客戶', 
+            orientation='h',
+            text='營收',
+            color='營收',
+            color_continuous_scale='GnBu'
+        )
+        fig4.update_traces(texttemplate='%{text:,.0f} TWD', textposition='outside', textfont_size=11)
+        fig4.update_layout(margin=dict(t=25, b=10), height=380, showlegend=False, xaxis_title="累計營收金額", yaxis_title="客戶名稱")
+        st.plotly_chart(fig4, use_container_width=True)
+    else:
+        st.info("💡 當前篩選條件下尚無產生實際營收之客戶。")
+
+    st.divider()
+
+    # =========================================================================
+    # 📊 【第四列】區塊 4：產品累積營收趨勢圖 (已修正 X 軸時間標籤)
+    # =========================================================================
     with st.container():
-        st.subheader("📈 企業整體與產品別累積營收趨勢 (堆疊視覺版)")
-        df_trend = df_filtered[(df_filtered['送樣月份'] != 'NaT') & (df_filtered['營收'] > 0)].copy()
+        st.subheader("📈 產品累積營收趨勢圖")
+        # 過濾掉空值，並確保只統計大於 0 的有效營收
+        df_trend = df_filtered[(df_filtered['送樣月份'].notna()) & (df_filtered['送樣月份'] != 'None') & (df_filtered['營收'] > 0)].copy()
         
         if not df_trend.empty:
             all_months = sorted(df_trend['送樣月份'].unique())
@@ -200,9 +201,11 @@ if uploaded_file is not None:
                 height=420,
                 margin=dict(t=15, b=10)
             )
+            # 強制將 X 軸型態指定為類別類別型態，徹底杜絕 Plotly 自動腦補時間尾巴
+            fig3.update_xaxes(type='category')
             st.plotly_chart(fig3, use_container_width=True)
         else:
             st.info("💡 當前篩選範圍內缺乏含有效日期的營收變動紀錄。")
 
 else:
-    st.info("👋 歡迎使用 Geckos CRM 系統。請先在左側面板上傳最新的「客戶產品列表_V2.xlsx」數據表。")
+    st.info("👋 歡迎使用 Geckos Customer Dashboard。請先在左側面板上傳最新的「客戶產品列表_V2.xlsx」數據表。")
