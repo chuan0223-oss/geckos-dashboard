@@ -8,10 +8,10 @@ from datetime import datetime
 # ⚙️ 網頁初始化與佈局設定
 # =========================================================================
 st.set_page_config(page_title="Geckos Customer Dashboard", layout="wide")
-st.title("📊 Geckos Customer Dashboard (V7.6)")
+st.title("📊 Geckos Customer Dashboard (V8.3)")
 
 st.sidebar.header("📂 資料管理中心")
-uploaded_file = st.sidebar.file_uploader("請上傳「客戶產品列表_V2」Excel 檔案", type=["xlsx"])
+uploaded_file = st.sidebar.file_uploader("請上傳最新的 Excel 檔案", type=["xlsx"])
 
 def get_safe_options(df, col_name):
     if col_name and col_name in df.columns:
@@ -21,13 +21,18 @@ def get_safe_options(df, col_name):
     return []
 
 # =========================================================================
-# 🚀 專屬產品 Roadmap 繪圖引擎 (V7.6 優化版)
+# 🚀 專屬產品 Roadmap 繪圖引擎
 # =========================================================================
 def create_product_roadmap(df_schedule, product_name):
-    """提取特定專案的時程，並繪製專屬的水平研發全週期 Roadmap"""
-    df_proj = df_schedule[df_schedule['專案'] == product_name]
+    if '產品名稱' in df_schedule.columns:
+        df_proj = df_schedule[df_schedule['產品名稱'] == product_name]
+    elif '專案' in df_schedule.columns:
+        df_proj = df_schedule[df_schedule['專案'] == product_name]
+    else:
+        return None, "時程表缺乏有效的產品/專案名稱欄位。"
+
     if df_proj.empty:
-        return None, "查無此產品的時程規劃資料（請確認『產品時程表』中是否有對應的專案名稱）。"
+        return None, "查無此產品的時程規劃資料。"
     
     row = df_proj.iloc[0]
     milestones = []
@@ -38,82 +43,69 @@ def create_product_roadmap(df_schedule, product_name):
         except:
             return pd.NaT
 
-    # 1. 開案節點
     start_date = parse_date(row.get('開案'))
-    if pd.notna(start_date): 
-        milestones.append({'name': '開案', 'date': start_date, 'color': '#3498DB', 'symbol': 'triangle-right', 'size': 20})
+    if pd.notna(start_date): milestones.append({'name': '開案', 'date': start_date, 'color': '#3498DB', 'symbol': 'triangle-right', 'size': 20})
         
-    # 2. NPDR / DV 節點
-    npdr_date = parse_date(row.get('NPDR時間'))
     trans_npdr_date = parse_date(row.get('轉NPDR時間'))
+    if pd.notna(trans_npdr_date): milestones.append({'name': '轉NPDR', 'date': trans_npdr_date, 'color': '#E67E22', 'symbol': 'hexagon', 'size': 18})
+
+    npdr_date = parse_date(row.get('NPDR時間'))
+    if pd.notna(npdr_date): milestones.append({'name': 'NPDR', 'date': npdr_date, 'color': '#D35400', 'symbol': 'pentagon', 'size': 18})
+
     dv_date = parse_date(row.get('設計驗證時間'))
-    
-    if pd.notna(dv_date):
-        milestones.append({'name': '設計驗證 (DV)', 'date': dv_date, 'color': '#F39C12', 'symbol': 'diamond', 'size': 18})
-    elif pd.notna(npdr_date):
-        milestones.append({'name': 'NPDR', 'date': npdr_date, 'color': '#F39C12', 'symbol': 'diamond', 'size': 18})
-    elif pd.notna(trans_npdr_date):
-        milestones.append({'name': '轉NPDR', 'date': trans_npdr_date, 'color': '#F39C12', 'symbol': 'diamond', 'size': 18})
+    if pd.notna(dv_date): milestones.append({'name': '設計驗證(DV)', 'date': dv_date, 'color': '#F39C12', 'symbol': 'diamond', 'size': 18})
         
-    # 3. 工程驗證 EV
     ev_date = parse_date(row.get('工程驗證時間'))
-    if pd.notna(ev_date): 
-        milestones.append({'name': '工程驗證 (EV)', 'date': ev_date, 'color': '#9B59B6', 'symbol': 'square', 'size': 18})
+    if pd.notna(ev_date): milestones.append({'name': '工程驗證(EV)', 'date': ev_date, 'color': '#9B59B6', 'symbol': 'square', 'size': 18})
         
-    # 4. 預計訂單起始點
     order_date = parse_date(row.get('預計訂單起始點'))
-    if pd.notna(order_date): 
-        milestones.append({'name': '預計訂單起始點', 'date': order_date, 'color': '#2ECC71', 'symbol': 'star', 'size': 24})
+    if pd.notna(order_date): milestones.append({'name': '訂單起始', 'date': order_date, 'color': '#2ECC71', 'symbol': 'star', 'size': 24})
         
     if not milestones:
         return None, "此產品的時程表內缺乏有效的日期資料。"
         
     df_ms = pd.DataFrame(milestones).sort_values('date')
-    
     fig = go.Figure()
     
-    # 繪製底部連線 (時間軸軌道)
     fig.add_trace(go.Scatter(
         x=df_ms['date'], y=[0] * len(df_ms),
         mode='lines', line=dict(color='#BDC3C7', width=3, dash='dot'),
         showlegend=False, hoverinfo='skip'
     ))
     
-    # 繪製各個里程碑節點
-    for _, ms in df_ms.iterrows():
+    for idx, ms in df_ms.reset_index(drop=True).iterrows():
         date_str = ms['date'].strftime('%Y-%m-%d')
+        text_pos = "top center" if idx % 2 == 0 else "bottom center"
+        
         fig.add_trace(go.Scatter(
             x=[ms['date']], y=[0],
             mode='markers+text',
             marker=dict(size=ms['size'], color=ms['color'], symbol=ms['symbol'], line=dict(width=2, color='white')),
             text=[f"<b>{ms['name']}</b><br>{date_str}"],
-            textposition="top center",
-            textfont=dict(size=13, color='#2C3E50'),
+            textposition=text_pos,
+            textfont=dict(size=12, color='#2C3E50'),
             name=ms['name'],
             hovertemplate=f"<b>{ms['name']}</b><br>日期: {date_str}<extra></extra>",
-            cliponaxis=False  # [優化 1] 允許文字超越畫布邊界，防止被截斷
+            cliponaxis=False  
         ))
         
-    # [優化 2] 將紅色虛線提示改為自動顯示當前上傳解析的日期 (格式: 西元年-月-日)
     today = pd.Timestamp.today()
     upload_date_str = today.strftime('%Y-%m-%d')
     fig.add_vline(
         x=today.timestamp() * 1000, line_dash="dash", line_color="#E74C3C", 
-        annotation_text=upload_date_str, annotation_position="bottom right", annotation_font_size=12
+        annotation_text=f"載入: {upload_date_str}", annotation_position="bottom right", annotation_font_size=12
     )
 
-    # [優化 1] 自動計算自適應 X 軸範圍，前後各外推 25 天，確保左右邊緣的字體完美顯示
     min_date = df_ms['date'].min()
     max_date = df_ms['date'].max()
-    plot_min = min(min_date, today) - pd.Timedelta(days=25)
-    plot_max = max(max_date, today) + pd.Timedelta(days=25)
+    plot_min = min(min_date, today) - pd.Timedelta(days=30)
+    plot_max = max(max_date, today) + pd.Timedelta(days=30)
 
-    # 圖表排版與美化
     fig.update_layout(
-        xaxis=dict(showgrid=True, gridcolor='#F2F3F4', title="時間推進軸", range=[plot_min, plot_max]),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-1, 1.5]),
+        xaxis=dict(showgrid=True, gridcolor='#F2F3F4', title="", range=[plot_min, plot_max]),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.8, 0.8]), 
         height=280,
-        margin=dict(l=40, r=40, t=40, b=20),  # 加大左右邊距邊框空間
+        margin=dict(l=40, r=40, t=30, b=30), 
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         showlegend=False
@@ -126,40 +118,49 @@ def create_product_roadmap(df_schedule, product_name):
 if uploaded_file is not None:
     try:
         df_tracking = pd.read_excel(uploaded_file, sheet_name='送樣追蹤管理表')
-        df_product = pd.read_excel(uploaded_file, sheet_name='產品列表')
         df_client = pd.read_excel(uploaded_file, sheet_name='客戶列表')
-        
-        try:
-            df_schedule = pd.read_excel(uploaded_file, sheet_name='產品時程表')
-        except:
-            df_schedule = pd.DataFrame()
+        df_schedule = pd.read_excel(uploaded_file, sheet_name='產品時程表')
+        df_product = df_schedule.copy()
 
+        # 強制將關鍵欄位轉型為字串並清除頭尾空白，避免因空白字元導致匹配失敗
+        if '產品名稱' in df_tracking.columns: df_tracking['產品名稱'] = df_tracking['產品名稱'].astype(str).str.strip()
+        if '產品名稱' in df_product.columns: df_product['產品名稱'] = df_product['產品名稱'].astype(str).str.strip()
+        if '產品名稱' in df_client.columns: df_client['產品名稱'] = df_client['產品名稱'].astype(str).str.strip()
+        if '客戶' in df_tracking.columns: df_tracking['客戶'] = df_tracking['客戶'].astype(str).str.strip()
+        if '客戶' in df_client.columns: df_client['客戶'] = df_client['客戶'].astype(str).str.strip()
+
+        for col in ['客戶', '產品名稱', '產業類別', '應用類別', '目的']:
+            if col not in df_client.columns:
+                df_client[col] = '未標示'
+                
         df_client['客戶'] = df_client['客戶'].ffill()
         df_client['產業類別'] = df_client['產業類別'].ffill()
-        df_client_clean = df_client[['客戶', '產品名稱', '產業類別', '應用類別']].drop_duplicates(subset=['客戶', '產品名稱'], keep='first')
+        df_client_clean = df_client[['客戶', '產品名稱', '產業類別', '應用類別', '目的']].drop_duplicates(subset=['客戶', '產品名稱'], keep='first')
+        
+        df_client_clean = df_client_clean.rename(columns={'目的': '開發目的'})
         
         cols_to_drop = ['Lot No.', '數量', '單位']
         df_tracking = df_tracking.drop(columns=[c for c in cols_to_drop if c in df_tracking.columns], errors='ignore')
 
-        prod_cols = ['產品名稱', '產品類別', '開案類別', '供應商/代理商']
-        for k_col in ['動能客戶1', '動能客戶2', '動能客戶3']:
-            if k_col in df_product.columns:
-                prod_cols.append(k_col)
+        prod_cols = ['產品名稱']
+        for c in ['產品類別', '開案類別', '供應商/代理商', '動能客戶1', '動能客戶2', '動能客戶3']:
+            if c in df_product.columns:
+                prod_cols.append(c)
             
         df_main = pd.merge(df_tracking, df_product[prod_cols], on='產品名稱', how='left')
         df_main = pd.merge(df_main, df_client_clean, on=['客戶', '產品名稱'], how='left')
 
         df_main['送樣或出貨日期'] = pd.to_datetime(df_main['送樣或出貨日期'], errors='coerce')
         df_main['送樣月份'] = df_main['送樣或出貨日期'].dt.strftime('%Y-%m').fillna('未標示')
-        df_main['營收'] = pd.to_numeric(df_main['營收'], errors='coerce').fillna(0)
+        df_main['營收'] = pd.to_numeric(df_main.get('營收', pd.Series([0]*len(df_main))), errors='coerce').fillna(0)
         
-        str_cols = ['客戶', '產品名稱', '應用類別', '供應商/代理商', '開案類別', '產業類別', '出樣/出貨', 'Status', '測試結果', '目的', '動能客戶1', '動能客戶2', '動能客戶3']
+        str_cols = ['客戶', '產品名稱', '應用類別', '供應商/代理商', '開案類別', '產業類別', '出樣/出貨', 'Status', '測試結果', '目的', '開發目的', '動能客戶1', '動能客戶2', '動能客戶3']
         for col in str_cols:
             if col in df_main.columns:
                 df_main[col] = df_main[col].astype(str).replace('nan', '未標示').str.strip()
 
     except Exception as e:
-        st.error(f"⚠️ 檔案讀取失敗: {e}")
+        st.error(f"⚠️ 檔案讀取失敗: {e}\n請確認上傳的 Excel 檔案格式。")
         st.stop()
 
     # =========================================================================
@@ -193,7 +194,7 @@ if uploaded_file is not None:
     st.subheader("🧩 客戶與產品維度分析")
     st.caption("💡 操作指南：在左側的【網格卡片牆】上下滾動，點選「🔍 檢視分析」，右側將無縫顯示深度資料。")
     
-    col_grid, col_drill = st.columns([1.3, 1.5])
+    col_grid, col_drill = st.columns([1.2, 1.6])
     
     if "active_view" not in st.session_state:
         st.session_state.active_view = None
@@ -202,7 +203,7 @@ if uploaded_file is not None:
     with col_grid:
         view_mode = st.radio("請選擇網格視圖：", ["🏢 顯示客戶", "📦 顯示產品"], horizontal=True, label_visibility="collapsed")
         
-        with st.container(height=500, border=False):
+        with st.container(height=580, border=False):
             if view_mode == "🏢 顯示客戶":
                 filtered_clients = df_filtered['客戶'].dropna().unique().tolist()
                 client_rev = df_filtered.groupby('客戶')['營收'].sum().to_dict()
@@ -231,8 +232,8 @@ if uploaded_file is not None:
                 prod_stats = []
                 for p in filtered_products:
                     df_p_temp = df_filtered[df_filtered['產品名稱'] == p]
-                    sample_cnt = len(df_p_temp[df_p_temp['出樣/出貨'] == '出樣'])
-                    ship_cnt = len(df_p_temp[df_p_temp['出樣/出貨'] == '出貨'])
+                    sample_cnt = df_p_temp['出樣/出貨'].str.contains('出樣|出样', na=False).sum()
+                    ship_cnt = df_p_temp['出樣/出貨'].str.contains('出貨|出货', na=False).sum()
                     prod_stats.append({"name": p, "sample": sample_cnt, "ship": ship_cnt})
                 
                 sorted_prods = sorted(prod_stats, key=lambda x: (x["sample"], x["ship"]), reverse=True)
@@ -258,7 +259,11 @@ if uploaded_file is not None:
 
     # --- 右側：無縫連動深度穿透面板 ---
     with col_drill:
-        with st.container(height=545, border=True):
+        with st.container(height=600, border=True):
+            
+            # =====================================================
+            # 視圖 A：顯示客戶
+            # =====================================================
             if st.session_state.active_view == 'client' and st.session_state.active_target:
                 target_client = st.session_state.active_target
                 st.markdown(f"### 🏢 客戶深度分析：【 {target_client} 】")
@@ -266,26 +271,46 @@ if uploaded_file is not None:
                 df_c = df_filtered[df_filtered['客戶'] == target_client]
                 
                 with tab1:
-                    industry = df_c['產業類別'].replace('未標示', pd.NA).dropna().iloc[0] if not df_c['產業類別'].replace('未標示', pd.NA).dropna().empty else "未標示"
-                    st.info(f"**👤 客戶名稱**：{target_client}\n\n**🏢 產業類別**：{industry}")
+                    industry = df_c['產業類別'].iloc[0] if not df_c['產業類別'].empty else "未標示"
+                    sent_products = [p for p in df_c['產品名稱'].unique() if str(p) not in ['nan', '未標示', '']]
+                    products_str = "、".join(sent_products) if sent_products else "暫無送樣產品紀錄"
+                    
+                    st.info(f"**👤 客戶名稱**：{target_client}\n\n**🏢 產業類別**：{industry}\n\n**📦 曾測試/採用產品**：{products_str}")
+                    
                     st.markdown("**🎯 開發目的**：")
-                    purposes = [p for p in df_c.get('目的', pd.Series()).dropna().unique() if str(p).strip() not in ["", "nan", "未標示"]]
+                    purposes = [p for p in df_c.get('開發目的', pd.Series(dtype=str)).unique() if str(p).strip() not in ["", "nan", "未標示", "None"]]
                     if purposes:
                         for i, p in enumerate(purposes, 1): st.write(f"{i}. {p}")
                     else:
                         st.caption("暫無明確開發目的紀錄。")
 
                 with tab2:
-                    st.markdown("##### 2. 送樣歷程追蹤")
-                    df_sample_c = df_c[df_c['出樣/出貨'] == '出樣']
+                    st.markdown("##### 📊 本客戶各產品送樣次數分佈")
+                    df_sample_c = df_c[df_c['出樣/出貨'].str.contains('出樣|出样', na=False)]
                     if not df_sample_c.empty:
+                        # [V8.3] 絕對強健的列數計算，無懼 NaN
+                        df_sample_size_c = df_sample_c.groupby('產品名稱').size().reset_index(name='送樣次數')
+                        df_sample_max_c = df_sample_c.groupby('產品名稱')['送樣月份'].max().reset_index(name='最後送樣月份')
+                        df_sample_agg_c = pd.merge(df_sample_size_c, df_sample_max_c, on='產品名稱')
+                        
+                        df_sample_agg_c['圖表標籤'] = df_sample_agg_c['送樣次數'].astype(str) + "次 (" + df_sample_agg_c['最後送樣月份'] + ")"
+                        fig_c_sample = px.bar(df_sample_agg_c, x='產品名稱', y='送樣次數', text='圖表標籤', hover_data=['最後送樣月份'], color_discrete_sequence=['#16A085'])
+                        fig_c_sample.update_traces(textposition='outside', textfont_size=11)
+                        
+                        # [V8.3] 動態拉高 Y 軸天花板，防止文字遭裁切，並拔除造成雙層誤會的 rangeslider
+                        max_y_c = df_sample_agg_c['送樣次數'].max()
+                        fig_c_sample.update_yaxes(range=[0, max_y_c * 1.3 + 0.5])
+                        fig_c_sample.update_layout(margin=dict(t=40, b=10), height=300, yaxis_title="送樣次數", xaxis_title="")
+                        st.plotly_chart(fig_c_sample, use_container_width=True, key=f"bar_c_{target_client}")
+                        
+                        st.markdown("---")
+                        st.markdown("##### 📝 送樣歷程追蹤明細")
                         prods_sampled = df_sample_c['產品名稱'].unique()
                         for prod in prods_sampled:
                             prod_samples = df_sample_c[df_sample_c['產品名稱'] == prod].sort_values('送樣或出貨日期')
                             sample_count = len(prod_samples)
                             with st.expander(f"📦 {prod} (累計送樣: {sample_count} 次)"):
-                                display_cols = ['送樣或出貨日期', '單號', 'Status', '測試結果']
-                                display_cols = [c for c in display_cols if c in prod_samples.columns]
+                                display_cols = [c for c in ['送樣或出貨日期', '單號', 'Status', '測試結果'] if c in prod_samples.columns]
                                 st.dataframe(prod_samples[display_cols], use_container_width=True, hide_index=True)
                     else:
                         st.warning("💡 該客戶目前尚無『出樣』紀錄。")
@@ -299,14 +324,24 @@ if uploaded_file is not None:
                     else:
                         st.info("💡 目前該客戶尚無營收。")
 
+            # =====================================================
+            # 視圖 B：顯示產品
+            # =====================================================
             elif st.session_state.active_view == 'product' and st.session_state.active_target:
                 target_prod = st.session_state.active_target
                 st.markdown(f"### 📦 產品型號深度分析：【 {target_prod} 】")
                 
-                tab1, tab2, tab3 = st.tabs(["🔬 產品資訊與動能客戶", "📝 測試結果明細", "🚀 專案研發全週期 Roadmap"])
+                tab1, tab2, tab3, tab4 = st.tabs(["🔬 產品資訊與動能客戶", "📝 測試結果明細", "🏆 客戶Top10", "🚀 專案研發全週期 Roadmap"])
                 df_p = df_filtered[df_filtered['產品名稱'] == target_prod]
                 
                 with tab1:
+                    df_p_schedule = df_schedule[df_schedule['產品名稱'] == target_prod] if '產品名稱' in df_schedule.columns else pd.DataFrame()
+                    p_cat = df_p_schedule['產品類別'].iloc[0] if not df_p_schedule.empty and pd.notna(df_p_schedule['產品類別'].iloc[0]) else '未標示'
+                    p_open = df_p_schedule['開案類別'].iloc[0] if not df_p_schedule.empty and pd.notna(df_p_schedule['開案類別'].iloc[0]) else '未標示'
+                    p_sup = df_p_schedule['供應商/代理商'].iloc[0] if not df_p_schedule.empty and pd.notna(df_p_schedule['供應商/代理商'].iloc[0]) else '未標示'
+                    
+                    st.info(f"**🏷️ 產品類別**：{p_cat} ｜ **📂 開案類別**：{p_open} ｜ **🏭 供應商/代理商**：{p_sup}")
+                    
                     k_list = []
                     for k_col in ['動能客戶1', '動能客戶2', '動能客戶3']:
                         if k_col in df_p.columns:
@@ -323,18 +358,38 @@ if uploaded_file is not None:
                     st.markdown("##### 產品各客戶指標統計")
                     df_prod_g = df_p.groupby('客戶').apply(
                         lambda x: pd.Series({
-                            '送樣次數': (x['出樣/出貨'] == '出樣').sum(),
-                            '出貨次數': (x['出樣/出貨'] == '出貨').sum(),
+                            '送樣次數': x['出樣/出貨'].str.contains('出樣|出样', na=False).sum(),
+                            '出貨次數': x['出樣/出貨'].str.contains('出貨|出货', na=False).sum(),
                             '最新狀態': x['Status'].iloc[-1] if not x.empty else '未標示'
                         })
                     ).reset_index().rename(columns={'最新狀態': 'Status'})
                     st.dataframe(df_prod_g, use_container_width=True, hide_index=True)
 
                 with tab2:
-                    st.markdown("##### 歷次測試結果列表")
+                    st.markdown("##### 📊 本產品各客戶送樣次數分佈")
+                    df_sample_p = df_p[df_p['出樣/出貨'].str.contains('出樣|出样', na=False)]
+                    if not df_sample_p.empty:
+                        # [V8.3] 絕對強健的列數計算，無懼 NaN
+                        df_sample_size_p = df_sample_p.groupby('客戶').size().reset_index(name='送樣次數')
+                        df_sample_max_p = df_sample_p.groupby('客戶')['送樣月份'].max().reset_index(name='最後送樣月份')
+                        df_sample_agg_p = pd.merge(df_sample_size_p, df_sample_max_p, on='客戶')
+                        
+                        df_sample_agg_p['圖表標籤'] = df_sample_agg_p['送樣次數'].astype(str) + "次 (" + df_sample_agg_p['最後送樣月份'] + ")"
+                        fig_p_sample = px.bar(df_sample_agg_p, x='客戶', y='送樣次數', text='圖表標籤', hover_data=['最後送樣月份'], color_discrete_sequence=['#3498DB'])
+                        fig_p_sample.update_traces(textposition='outside', textfont_size=11)
+                        
+                        # [V8.3] 動態拉高 Y 軸天花板，防止文字遭裁切，並拔除造成雙層誤會的 rangeslider
+                        max_y_p = df_sample_agg_p['送樣次數'].max()
+                        fig_p_sample.update_yaxes(range=[0, max_y_p * 1.3 + 0.5])
+                        fig_p_sample.update_layout(margin=dict(t=40, b=10), height=300, yaxis_title="送樣次數", xaxis_title="")
+                        st.plotly_chart(fig_p_sample, use_container_width=True, key=f"bar_{target_prod}")
+                    else:
+                        st.info("本產品目前尚無『出樣』紀錄可繪製圖表。")
+                        
+                    st.markdown("---")
+                    st.markdown("##### 📝 歷次測試結果列表")
                     df_hover = df_p.copy()
                     df_hover['測試結果'] = df_hover['測試結果'].replace('未標示', '無填寫結果')
-                    
                     df_test_results = df_hover[['送樣或出貨日期', '客戶', 'Status', '測試結果']].sort_values('送樣或出貨日期', ascending=False)
                     if not df_test_results.empty:
                         st.dataframe(df_test_results, use_container_width=True, hide_index=True)
@@ -342,6 +397,22 @@ if uploaded_file is not None:
                         st.info("該產品目前尚無相關紀錄。")
                         
                 with tab3:
+                    st.markdown(f"##### 🏆 {target_prod} 客戶營收貢獻度 TOP 10")
+                    df_rev_client_p = df_p.groupby('客戶')['營收'].sum().reset_index()
+                    df_rev_client_p = df_rev_client_p[df_rev_client_p['營收'] > 0].nlargest(10, '營收').sort_values('營收', ascending=True)
+                    if not df_rev_client_p.empty:
+                        fig_p_rev = px.bar(df_rev_client_p, x='營收', y='客戶', orientation='h', text='營收', color='營收', color_continuous_scale='GnBu')
+                        fig_p_rev.update_traces(texttemplate='%{text:,.0f} TWD', textposition='outside', textfont_size=11)
+                        
+                        # [V8.3] 動態延伸 X 軸右側，防止長條圖數字裁邊
+                        max_x_p = df_rev_client_p['營收'].max()
+                        fig_p_rev.update_xaxes(range=[0, max_x_p * 1.3])
+                        fig_p_rev.update_layout(margin=dict(t=40, b=10, r=40), height=350, showlegend=False, xaxis_title="累計營收金額", yaxis_title="客戶名稱")
+                        st.plotly_chart(fig_p_rev, use_container_width=True, key=f"rev_{target_prod}")
+                    else:
+                        st.info("💡 目前該產品尚無產生實際營收之客戶。")
+
+                with tab4:
                     st.markdown(f"##### 🎯 {target_prod} 關鍵里程碑")
                     if not df_schedule.empty:
                         fig, error_msg = create_product_roadmap(df_schedule, target_prod)
@@ -358,43 +429,10 @@ if uploaded_file is not None:
     st.divider()
 
     # =========================================================================
-    # 📊 區塊 3：產品送樣次數與時程統計
-    # =========================================================================
-    st.subheader("📦 產品送樣次數與時程統計")
-    df_sample = df_filtered[df_filtered['出樣/出貨'] == '出樣']
-    if not df_sample.empty:
-        df_sample_agg = df_sample.groupby(['客戶', '產品名稱']).agg(送樣次數=('單號', 'count'), 最後送樣月份=('送樣月份', 'max')).reset_index()
-        df_sample_agg['圖表標籤'] = df_sample_agg['送樣次數'].astype(str) + "次 (" + df_sample_agg['最後送樣月份'] + ")"
-        fig2 = px.bar(df_sample_agg, x='客戶', y='送樣次數', color='產品名稱', text='圖表標籤', hover_data=['最後送樣月份'], barmode='group', color_discrete_sequence=px.colors.qualitative.Safe)
-        fig2.update_traces(textposition='outside', textfont_size=11)
-        fig2.update_layout(margin=dict(t=25, b=10), height=400, xaxis_title="客戶名稱", yaxis_title="送樣累計次數")
-        st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.info("💡 當前篩選條件下無任何『出樣』紀錄。")
-
-    st.divider()
-
-    # =========================================================================
-    # 📊 區塊 4：客戶營收貢獻度 TOP 10
-    # =========================================================================
-    st.subheader("🏆 客戶營收貢獻度 TOP 10")
-    df_rev_client = df_filtered.groupby('客戶')['營收'].sum().reset_index()
-    df_rev_client = df_rev_client[df_rev_client['營收'] > 0].nlargest(10, '營收').sort_values('營收', ascending=True)
-    if not df_rev_client.empty:
-        fig4 = px.bar(df_rev_client, x='營收', y='客戶', orientation='h', text='營收', color='營收', color_continuous_scale='GnBu')
-        fig4.update_traces(texttemplate='%{text:,.0f} TWD', textposition='outside', textfont_size=11)
-        fig4.update_layout(margin=dict(t=25, b=10), height=380, showlegend=False, xaxis_title="累計營收金額", yaxis_title="客戶名稱")
-        st.plotly_chart(fig4, use_container_width=True)
-    else:
-        st.info("💡 當前篩選條件下尚無產生實際營收之客戶。")
-
-    st.divider()
-
-    # =========================================================================
-    # 📊 區塊 5：產品累積營收趨勢圖
+    # 📊 區塊 3：產品累積營收趨勢圖 (全域宏觀視圖)
     # =========================================================================
     with st.container():
-        st.subheader("📈 產品累積營收趨勢圖")
+        st.subheader("📈 產品累積營收總體趨勢圖")
         df_trend = df_filtered[(df_filtered['送樣月份'].notna()) & (df_filtered['送樣月份'] != '未標示') & (df_filtered['營收'] > 0)].copy()
         if not df_trend.empty:
             all_months = sorted(df_trend['送樣月份'].unique())
@@ -406,6 +444,7 @@ if uploaded_file is not None:
             df_monthly_rev = df_monthly_rev.sort_values(by='送樣月份')
 
             fig3 = px.area(df_monthly_rev, x='送樣月份', y='累積營收', color='產品名稱', line_group='產品名稱', markers=True, color_discrete_sequence=px.colors.qualitative.Vivid, hover_data={'營收': ':,.0f'})
+            # 同步將底部的 rangeslider 移除，維持版面乾淨
             fig3.update_layout(xaxis_title="營收統計月份", yaxis_title="總體累積營收 (TWD)", hovermode="x unified", height=420, margin=dict(t=15, b=10))
             fig3.update_xaxes(type='category')
             st.plotly_chart(fig3, use_container_width=True)
@@ -413,4 +452,4 @@ if uploaded_file is not None:
             st.info("💡 當前篩選範圍內缺乏含有效日期的營收變動紀錄。")
 
 else:
-    st.info("👋 歡迎使用 Geckos Customer Dashboard。請先在左側面板上傳最新的「客戶產品列表_V2.xlsx」數據表。")
+    st.info("👋 歡迎使用 Geckos Customer Dashboard。請先在左側面板上傳最新的 Excel 數據表。")
