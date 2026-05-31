@@ -8,7 +8,7 @@ from datetime import datetime
 # ⚙️ 網頁初始化與佈局設定
 # =========================================================================
 st.set_page_config(page_title="Geckos Customer Dashboard", layout="wide")
-st.title("📊 Geckos Customer Dashboard (V8.3)")
+st.title("📊 Geckos Customer Dashboard (V8.5)")
 
 st.sidebar.header("📂 資料管理中心")
 uploaded_file = st.sidebar.file_uploader("請上傳最新的 Excel 檔案", type=["xlsx"])
@@ -122,7 +122,6 @@ if uploaded_file is not None:
         df_schedule = pd.read_excel(uploaded_file, sheet_name='產品時程表')
         df_product = df_schedule.copy()
 
-        # 強制將關鍵欄位轉型為字串並清除頭尾空白，避免因空白字元導致匹配失敗
         if '產品名稱' in df_tracking.columns: df_tracking['產品名稱'] = df_tracking['產品名稱'].astype(str).str.strip()
         if '產品名稱' in df_product.columns: df_product['產品名稱'] = df_product['產品名稱'].astype(str).str.strip()
         if '產品名稱' in df_client.columns: df_client['產品名稱'] = df_client['產品名稱'].astype(str).str.strip()
@@ -288,7 +287,6 @@ if uploaded_file is not None:
                     st.markdown("##### 📊 本客戶各產品送樣次數分佈")
                     df_sample_c = df_c[df_c['出樣/出貨'].str.contains('出樣|出样', na=False)]
                     if not df_sample_c.empty:
-                        # [V8.3] 絕對強健的列數計算，無懼 NaN
                         df_sample_size_c = df_sample_c.groupby('產品名稱').size().reset_index(name='送樣次數')
                         df_sample_max_c = df_sample_c.groupby('產品名稱')['送樣月份'].max().reset_index(name='最後送樣月份')
                         df_sample_agg_c = pd.merge(df_sample_size_c, df_sample_max_c, on='產品名稱')
@@ -297,7 +295,6 @@ if uploaded_file is not None:
                         fig_c_sample = px.bar(df_sample_agg_c, x='產品名稱', y='送樣次數', text='圖表標籤', hover_data=['最後送樣月份'], color_discrete_sequence=['#16A085'])
                         fig_c_sample.update_traces(textposition='outside', textfont_size=11)
                         
-                        # [V8.3] 動態拉高 Y 軸天花板，防止文字遭裁切，並拔除造成雙層誤會的 rangeslider
                         max_y_c = df_sample_agg_c['送樣次數'].max()
                         fig_c_sample.update_yaxes(range=[0, max_y_c * 1.3 + 0.5])
                         fig_c_sample.update_layout(margin=dict(t=40, b=10), height=300, yaxis_title="送樣次數", xaxis_title="")
@@ -316,11 +313,38 @@ if uploaded_file is not None:
                         st.warning("💡 該客戶目前尚無『出樣』紀錄。")
 
                 with tab3:
-                    st.markdown("##### 3. 累積營收")
                     total_revenue = df_c['營收'].sum()
                     if total_revenue > 0:
+                        # 1. 總計指標
                         st.metric(label="📊 總體營收貢獻金額", value=f"{total_revenue:,.0f} TWD")
-                        st.dataframe(df_c[df_c['營收'] > 0][['送樣月份', '產品名稱', '營收']].sort_values('送樣月份'), use_container_width=True, hide_index=True)
+                        
+                        # [V8.5 優化] 2. 內化全域營收結構圖 (專屬此客戶的產品營收分佈)
+                        st.markdown("##### 📈 產品營收貢獻分佈")
+                        df_rev_structure_c = df_c[df_c['營收'] > 0].groupby('產品名稱')['營收'].sum().reset_index()
+                        df_rev_structure_c = df_rev_structure_c.sort_values('營收', ascending=False)
+                        
+                        fig_c_rev = px.bar(
+                            df_rev_structure_c, 
+                            x='產品名稱', 
+                            y='營收', 
+                            text='營收',
+                            color='產品名稱',
+                            color_discrete_sequence=px.colors.qualitative.Set3
+                        )
+                        fig_c_rev.update_traces(texttemplate='%{text:,.0f} TWD', textposition='outside', textfont_size=11)
+                        
+                        max_y_c_rev = df_rev_structure_c['營收'].max()
+                        fig_c_rev.update_yaxes(range=[0, max_y_c_rev * 1.3])
+                        fig_c_rev.update_layout(margin=dict(t=40, b=10), height=300, showlegend=False, xaxis_title="", yaxis_title="累計營收 (TWD)")
+                        st.plotly_chart(fig_c_rev, use_container_width=True, key=f"rev_c_{target_client}")
+                        
+                        st.markdown("---")
+                        
+                        # [V8.5 優化] 3. 明細列表 (欄位更名為出貨月份)
+                        st.markdown("##### 📝 營收明細列表")
+                        df_c_rev_table = df_c[df_c['營收'] > 0][['送樣月份', '產品名稱', '營收']].sort_values('送樣月份')
+                        df_c_rev_table = df_c_rev_table.rename(columns={'送樣月份': '出貨月份'})
+                        st.dataframe(df_c_rev_table, use_container_width=True, hide_index=True)
                     else:
                         st.info("💡 目前該客戶尚無營收。")
 
@@ -369,7 +393,6 @@ if uploaded_file is not None:
                     st.markdown("##### 📊 本產品各客戶送樣次數分佈")
                     df_sample_p = df_p[df_p['出樣/出貨'].str.contains('出樣|出样', na=False)]
                     if not df_sample_p.empty:
-                        # [V8.3] 絕對強健的列數計算，無懼 NaN
                         df_sample_size_p = df_sample_p.groupby('客戶').size().reset_index(name='送樣次數')
                         df_sample_max_p = df_sample_p.groupby('客戶')['送樣月份'].max().reset_index(name='最後送樣月份')
                         df_sample_agg_p = pd.merge(df_sample_size_p, df_sample_max_p, on='客戶')
@@ -378,7 +401,6 @@ if uploaded_file is not None:
                         fig_p_sample = px.bar(df_sample_agg_p, x='客戶', y='送樣次數', text='圖表標籤', hover_data=['最後送樣月份'], color_discrete_sequence=['#3498DB'])
                         fig_p_sample.update_traces(textposition='outside', textfont_size=11)
                         
-                        # [V8.3] 動態拉高 Y 軸天花板，防止文字遭裁切，並拔除造成雙層誤會的 rangeslider
                         max_y_p = df_sample_agg_p['送樣次數'].max()
                         fig_p_sample.update_yaxes(range=[0, max_y_p * 1.3 + 0.5])
                         fig_p_sample.update_layout(margin=dict(t=40, b=10), height=300, yaxis_title="送樣次數", xaxis_title="")
@@ -404,7 +426,6 @@ if uploaded_file is not None:
                         fig_p_rev = px.bar(df_rev_client_p, x='營收', y='客戶', orientation='h', text='營收', color='營收', color_continuous_scale='GnBu')
                         fig_p_rev.update_traces(texttemplate='%{text:,.0f} TWD', textposition='outside', textfont_size=11)
                         
-                        # [V8.3] 動態延伸 X 軸右側，防止長條圖數字裁邊
                         max_x_p = df_rev_client_p['營收'].max()
                         fig_p_rev.update_xaxes(range=[0, max_x_p * 1.3])
                         fig_p_rev.update_layout(margin=dict(t=40, b=10, r=40), height=350, showlegend=False, xaxis_title="累計營收金額", yaxis_title="客戶名稱")
@@ -427,29 +448,6 @@ if uploaded_file is not None:
                 st.markdown("<div style='text-align: center; padding: 180px 20px; color: gray;'>🔍 <b>操作提示</b><br><br>請點擊左側網格卡片上的【🔍 檢視分析】，<br>此處將自動穿透並呈現專屬的深度分析資料。</div>", unsafe_allow_html=True)
 
     st.divider()
-
-    # =========================================================================
-    # 📊 區塊 3：產品累積營收趨勢圖 (全域宏觀視圖)
-    # =========================================================================
-    with st.container():
-        st.subheader("📈 產品累積營收總體趨勢圖")
-        df_trend = df_filtered[(df_filtered['送樣月份'].notna()) & (df_filtered['送樣月份'] != '未標示') & (df_filtered['營收'] > 0)].copy()
-        if not df_trend.empty:
-            all_months = sorted(df_trend['送樣月份'].unique())
-            all_products = df_trend['產品名稱'].unique()
-            multi_idx = pd.MultiIndex.from_product([all_months, all_products], names=['送樣月份', '產品名稱'])
-            df_monthly_rev = df_trend.groupby(['送樣月份', '產品名稱'])['營收'].sum().reset_index()
-            df_monthly_rev = df_monthly_rev.set_index(['送樣月份', '產品名稱']).reindex(multi_idx, fill_value=0).reset_index()
-            df_monthly_rev['累積營收'] = df_monthly_rev.groupby('產品名稱')['營收'].cumsum()
-            df_monthly_rev = df_monthly_rev.sort_values(by='送樣月份')
-
-            fig3 = px.area(df_monthly_rev, x='送樣月份', y='累積營收', color='產品名稱', line_group='產品名稱', markers=True, color_discrete_sequence=px.colors.qualitative.Vivid, hover_data={'營收': ':,.0f'})
-            # 同步將底部的 rangeslider 移除，維持版面乾淨
-            fig3.update_layout(xaxis_title="營收統計月份", yaxis_title="總體累積營收 (TWD)", hovermode="x unified", height=420, margin=dict(t=15, b=10))
-            fig3.update_xaxes(type='category')
-            st.plotly_chart(fig3, use_container_width=True)
-        else:
-            st.info("💡 當前篩選範圍內缺乏含有效日期的營收變動紀錄。")
 
 else:
     st.info("👋 歡迎使用 Geckos Customer Dashboard。請先在左側面板上傳最新的 Excel 數據表。")
