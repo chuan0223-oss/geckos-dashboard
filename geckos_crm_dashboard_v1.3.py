@@ -8,7 +8,7 @@ from datetime import datetime
 # ⚙️ 網頁初始化與佈局設定
 # =========================================================================
 st.set_page_config(page_title="Geckos Customer Dashboard", layout="wide")
-st.title("📊 Geckos Customer Dashboard (V8.5)")
+st.title("📊 Geckos Customer Relationship Management")
 
 st.sidebar.header("📂 資料管理中心")
 uploaded_file = st.sidebar.file_uploader("請上傳最新的 Excel 檔案", type=["xlsx"])
