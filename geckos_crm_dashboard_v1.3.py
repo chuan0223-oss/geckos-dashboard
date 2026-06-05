@@ -450,4 +450,4 @@ if uploaded_file is not None:
     st.divider()
 
 else:
-    st.info("👋 歡迎使用 Geckos Customer Dashboard。請先在左側面板上傳最新的 Excel 數據表。")
+    st.info("👋 歡迎使用 Geckos Customer Relationship Management。請先在左側面板上傳最新的 Excel 數據表。")
