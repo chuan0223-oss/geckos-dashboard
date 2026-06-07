@@ -9,7 +9,7 @@ from datetime import datetime
 # =========================================================================
 st.set_page_config(page_title="Geckos Customer Dashboard", layout="wide")
 
-# [V8.9 終極優化] 注入極致的 CSS：自動換行展開所有 Tabs，消滅隱藏與捲動的痛點！
+# 注入極致的 CSS：自動換行展開所有 Tabs，消滅隱藏與捲動的痛點！
 st.markdown("""
     <style>
     /* 1. 設定右側資料面板固定不動 */
@@ -51,7 +51,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Geckos Customer Relationship Management")
+st.title("📊 Geckos Customer Relationship Managemen")
 
 # =========================================================================
 # 📂 左側側邊欄：資料上傳與篩選條件
@@ -233,7 +233,7 @@ if uploaded_file is not None:
     # 🧩 區塊 2：客戶與產品維度分析
     # =========================================================================
     st.subheader("🧩 客戶與產品維度分析")
-    st.caption("💡 操作指南：在左側網格卡片點選「🔍 檢視分析」，右側面板將自動鎖定顯示。**所有的功能頁籤已全展開為多行矩陣，方便您一眼點選！**")
+    st.caption("💡 操作指南：在左側網格卡片尋找目標並點選「🔍 檢視分析」，右側面板將自動鎖定顯示。**所有的功能頁籤已全展開為多行矩陣，方便您一眼點選！**")
     
     col_grid, col_drill = st.columns([1.2, 1.6])
     
@@ -377,7 +377,6 @@ if uploaded_file is not None:
                             color_discrete_sequence=px.colors.qualitative.Set3
                         )
                         fig_c_rev.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont_size=11)
-                        # 強制設定 X 軸為純類別
                         fig_c_rev.update_xaxes(type='category')
                         max_y_c_rev = df_rev_structure_c['營收'].max()
                         fig_c_rev.update_yaxes(range=[0, max_y_c_rev * 1.3])
@@ -399,7 +398,6 @@ if uploaded_file is not None:
                 target_prod = st.session_state.active_target
                 st.markdown(f"### 📦 產品型號深度分析：【 {target_prod} 】")
                 
-                # 這裡的 Tabs 透過上方的 Auto-Wrap CSS 將會完美地展開為多行按鈕，不再被隱藏！
                 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔬 產品資訊與動能客戶", "📝 測試結果明細", "🏆 客戶Top10", "📅 每月營收分佈", "🚀 專案研發 Roadmap"])
                 df_p = df_filtered[df_filtered['產品名稱'] == target_prod]
                 
@@ -499,7 +497,6 @@ if uploaded_file is not None:
                             color_discrete_sequence=px.colors.qualitative.Set3
                         )
                         fig_p_rev_time.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont_size=11)
-                        # 強制設定 X 軸為純類別
                         fig_p_rev_time.update_xaxes(type='category')
                         max_y_p_rev = df_rev_structure_p['營收'].max()
                         fig_p_rev_time.update_yaxes(range=[0, max_y_p_rev * 1.3])
@@ -522,29 +519,5 @@ if uploaded_file is not None:
             else:
                 st.markdown("<div style='text-align: center; padding: 180px 20px; color: gray;'>🔍 <b>操作提示</b><br><br>請點擊左側網格卡片上的【🔍 檢視分析】，<br>此處將自動鎖定並呈獻專屬的深度分析資料。</div>", unsafe_allow_html=True)
 
-    st.divider()
-
-    # =========================================================================
-    # 📊 區塊 3：產品累積營收趨勢圖 (全域宏觀視圖)
-    # =========================================================================
-    with st.container():
-        st.subheader("📈 產品累積營收總體趨勢圖")
-        df_trend = df_filtered[(df_filtered['送樣月份'].notna()) & (df_filtered['送樣月份'] != '未標示') & (df_filtered['營收'] > 0)].copy()
-        if not df_trend.empty:
-            all_months = sorted(df_trend['送樣月份'].unique())
-            all_products = df_trend['產品名稱'].unique()
-            multi_idx = pd.MultiIndex.from_product([all_months, all_products], names=['送樣月份', '產品名稱'])
-            df_monthly_rev = df_trend.groupby(['送樣月份', '產品名稱'])['營收'].sum().reset_index()
-            df_monthly_rev = df_monthly_rev.set_index(['送樣月份', '產品名稱']).reindex(multi_idx, fill_value=0).reset_index()
-            df_monthly_rev['累積營收'] = df_monthly_rev.groupby('產品名稱')['營收'].cumsum()
-            df_monthly_rev = df_monthly_rev.sort_values(by='送樣月份')
-
-            fig3 = px.area(df_monthly_rev, x='送樣月份', y='累積營收', color='產品名稱', line_group='產品名稱', markers=True, color_discrete_sequence=px.colors.qualitative.Vivid, hover_data={'營收': ':,.0f'})
-            fig3.update_layout(xaxis_title="營收統計月份", yaxis_title="總體累積營收 (TWD)", hovermode="x unified", height=420, margin=dict(t=15, b=10))
-            fig3.update_xaxes(type='category')
-            st.plotly_chart(fig3, use_container_width=True)
-        else:
-            st.info("💡 當前篩選範圍內缺乏含有效日期的營收變動紀錄。")
-
 else:
-    st.info("👋 歡迎使用 Geckos Customer Relationship Management。請先在左側面板上傳最新的 Excel 數據表。")
+    st.info("👋 歡迎使用 GGeckos Customer Relationship Managemen。請先在左側面板上傳最新的 Excel 數據表。")
