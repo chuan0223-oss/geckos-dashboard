@@ -51,7 +51,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Geckos Customer Dashboard (V9.3)")
+st.title("📊 Geckos Customer Dashboard (V9.5)")
 
 # =========================================================================
 # 📂 左側側邊欄：資料上傳與篩選條件
@@ -229,7 +229,7 @@ if uploaded_file is not None:
     if filter_industry: df_filtered = df_filtered[df_filtered['產業類別'].isin(filter_industry)]
 
     # =========================================================================
-    # 🧠 核心重構：打包「深度分析」的獨立渲染引擎 (確保不影響既有功能)
+    # 🧠 核心重構：打包「深度分析」的獨立渲染引擎
     # =========================================================================
     def render_drilldown_panel():
         """渲染右側或全螢幕的深度分析面板"""
@@ -462,6 +462,15 @@ if uploaded_file is not None:
     # =========================================================================
     # 🧩 區塊 2：動態版面控制器 (全螢幕專注模式 vs 雙欄模式)
     # =========================================================================
+    
+    # [V9.5 核心機制] 建立獨立保險箱，永久記憶使用者的網格視圖選擇
+    if "saved_view_mode" not in st.session_state:
+        st.session_state.saved_view_mode = "🏢 顯示客戶"
+
+    def on_view_change():
+        """當單選按鈕切換時，將選擇存入永久保險箱"""
+        st.session_state.saved_view_mode = st.session_state.radio_view_mode
+
     if "is_focus_mode" not in st.session_state:
         st.session_state.is_focus_mode = False
 
@@ -469,14 +478,12 @@ if uploaded_file is not None:
     if st.session_state.is_focus_mode:
         st.subheader("🎯 深度分析專注模式")
         
-        # 返回按鈕佈局 (放置於全寬畫面的左上方)
         col_back, _ = st.columns([2, 8])
         with col_back:
             if st.button("🔙 返回列表", type="primary", use_container_width=True):
                 st.session_state.is_focus_mode = False
                 st.rerun()
         
-        # 100% 全寬渲染分析面板
         with st.container(border=True):
             render_drilldown_panel()
 
@@ -488,7 +495,16 @@ if uploaded_file is not None:
         col_grid, col_drill = st.columns([1.2, 1.6])
         
         with col_grid:
-            view_mode = st.radio("請選擇網格視圖：", ["🏢 顯示客戶", "📦 顯示產品"], horizontal=True, label_visibility="collapsed")
+            # [V9.5 核心機制] 單選按鈕讀取永久保險箱的值，並在切換時觸發回呼函數
+            view_mode = st.radio(
+                "請選擇網格視圖：", 
+                ["🏢 顯示客戶", "📦 顯示產品"], 
+                horizontal=True, 
+                label_visibility="collapsed",
+                key="radio_view_mode",
+                index=0 if st.session_state.saved_view_mode == "🏢 顯示客戶" else 1,
+                on_change=on_view_change
+            )
             
             with st.container(height=700, border=False):
                 if view_mode == "🏢 顯示客戶":
@@ -512,7 +528,6 @@ if uploaded_file is not None:
                                             if st.button("🔍 檢視分析", key=f"btn_c_{c_data['name']}", use_container_width=True):
                                                 st.session_state.active_view = 'client'
                                                 st.session_state.active_target = c_data['name']
-                                                # [V9.3] 開啟全螢幕模式並重新渲染
                                                 st.session_state.is_focus_mode = True
                                                 st.rerun()
                                             
@@ -544,13 +559,11 @@ if uploaded_file is not None:
                                             if st.button("🔍 檢視分析", key=f"btn_p_{p_data['name']}", use_container_width=True):
                                                 st.session_state.active_view = 'product'
                                                 st.session_state.active_target = p_data['name']
-                                                # [V9.3] 開啟全螢幕模式並重新渲染
                                                 st.session_state.is_focus_mode = True
                                                 st.rerun()
 
         with col_drill:
             with st.container(border=True):
-                # 雙欄模式下，右側同步呼叫渲染引擎
                 render_drilldown_panel()
 
 else:
