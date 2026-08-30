@@ -1,11 +1,13 @@
 """
 程式名稱: checkin.py
-版本: V1.2
+版本: V1.3
 更新內容:
-1. 滿 9 小時工時檢核二次確認防呆機制 (未滿時暫緩寫入，提供 OK / 不OK 選擇)
-2. 員工打卡紀錄隱私隔離 (僅呈現選定員工紀錄)
-3. 自由 Key-in 修改/補登時間 (HH:MM 格式)
-4. 繁體中文 / Bahasa Indonesia 雙語一鍵切換
+1. 時區校正：全面鎖定台灣時區 (Asia/Taipei, UTC+8)，解決雲端主機時間差 8 小時的問題
+2. 日期自動鎖定：開啟系統時自動帶入當天日期，免去手動切換
+3. 滿 9 小時工時檢核二次確認防呆機制 (未滿時跳出 OK / 不OK 選項)
+4. 員工打卡紀錄隱私隔離 (僅呈現選定員工紀錄)
+5. 自由 Key-in 修改/補登時間 (HH:MM 格式)
+6. 繁體中文 / Bahasa Indonesia 雙語一鍵切換
 """
 
 import streamlit as st
@@ -15,11 +17,19 @@ import datetime
 import io
 import openpyxl
 import re
+from zoneinfo import ZoneInfo
 
-# ==================== 系統常數與版本設定 ====================
-APP_VERSION = "V1.2"
+# ==================== 系統常數與時區設定 ====================
+APP_VERSION = "V1.3"
+TZ_TAIPEI = ZoneInfo("Asia/Taipei")
+
+# 員工清單 (可依需求自訂呈現名稱)
 EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都發)", "OFW003(菲娜)"]
 DB_FILE = "attendance.db"
+
+# 取得台灣當前時間與日期的輔助函數
+def get_current_tw_datetime():
+    return datetime.datetime.now(TZ_TAIPEI)
 
 # ==================== 多語系字典 (雙語對照) ====================
 TRANSLATIONS = {
@@ -262,8 +272,12 @@ def generate_excel_export(df_records):
 
     for idx, row in df_records.iterrows():
         r_num = 5 + idx
+        # 匯出時若有包含括號名字，自動擷取前面的員工編號代碼 (如 OFW001)
+        raw_emp = str(row["emp_id"])
+        emp_code = raw_emp.split("(")[0].strip() if "(" in raw_emp else raw_emp
+        
         ws.cell(row=r_num, column=1, value=idx + 1)
-        ws.cell(row=r_num, column=2, value=str(row["emp_id"]))
+        ws.cell(row=r_num, column=2, value=emp_code)
         ws.cell(row=r_num, column=3, value=str(row["date"]))
         ws.cell(row=r_num, column=4, value=str(row["time"]))
 
@@ -278,6 +292,10 @@ def generate_excel_export(df_records):
     return buffer
 
 # ==================== 側邊欄：日期選擇、語系與匯出 ====================
+# 取得台灣當前的精準時間
+now_tw = get_current_tw_datetime()
+today_tw = now_tw.date()
+
 with st.sidebar:
     lang_choice = st.radio(
         t("lang_label"),
@@ -292,7 +310,9 @@ with st.sidebar:
 
     st.markdown("---")
     st.header(t("date_mgmt"))
-    selected_date = st.date_input(t("select_date"), datetime.date.today())
+    
+    # 預設自動帶入台灣今日日期 (today_tw)
+    selected_date = st.date_input(t("select_date"), today_tw)
     selected_date_str = selected_date.strftime("%Y/%m/%d")
     
     st.info(f"{t('current_view_date')}：**{selected_date_str}**")
@@ -343,13 +363,13 @@ for i, emp in enumerate(EMPLOYEES):
     btn_type = "primary" if st.session_state.selected_emp == emp else "secondary"
     if emp_cols[i].button(f"👤 {emp}", key=f"emp_btn_{emp}", type=btn_type, use_container_width=True):
         st.session_state.selected_emp = emp
-        st.session_state.pending_clock_out = None  # 切換人員時重設待確認狀態
+        st.session_state.pending_clock_out = None
         st.rerun()
 
 current_emp = st.session_state.selected_emp
 st.success(f"{t('current_selected')}：**{current_emp}**")
 
-# 2. 工時不足確認卡片 (若觸發二次防呆)
+# 2. 工時不足確認卡片 (二次防呆機制)
 if st.session_state.pending_clock_out and st.session_state.pending_clock_out["emp_id"] == current_emp:
     pending_info = st.session_state.pending_clock_out
     with st.container():
@@ -357,26 +377,22 @@ if st.session_state.pending_clock_out and st.session_state.pending_clock_out["em
         col_ok, col_cancel = st.columns(2)
         with col_ok:
             if st.button(t("btn_confirm_ok"), type="primary", use_container_width=True):
-                # 確認打卡 -> 正式寫入 DB
                 add_record(pending_info["emp_id"], pending_info["date"], pending_info["time"], "下班")
                 st.toast(f"✅ {pending_info['emp_id']} {t('clock_out_success')}：{pending_info['time']}", icon="👋")
                 st.session_state.pending_clock_out = None
                 st.rerun()
         with col_cancel:
             if st.button(t("btn_confirm_cancel"), type="secondary", use_container_width=True):
-                # 取消打卡 -> 不寫入 DB
                 st.info(t("msg_action_cancelled"))
                 st.session_state.pending_clock_out = None
                 st.rerun()
     st.markdown("---")
 
-# 3. 即時打卡按鈕
+# 3. 即時打卡按鈕 (以台灣時區時間為準)
 st.subheader(t("step2_clock"))
 clock_cols = st.columns(2)
 
-now = datetime.datetime.now()
-current_time_str = now.strftime("%H:%M")
-
+current_time_str = now_tw.strftime("%H:%M")
 emp_today_records = get_emp_records_by_date(current_emp, selected_date_str)
 
 with clock_cols[0]:
@@ -390,7 +406,6 @@ with clock_cols[1]:
     if st.button(t("clock_out"), use_container_width=True):
         clock_in_records = emp_today_records[emp_today_records["type"] == "上班"]
         
-        # 情況 A: 當天完全沒有打上班卡 -> 觸發確認防呆
         if clock_in_records.empty:
             st.session_state.pending_clock_out = {
                 "emp_id": current_emp,
@@ -403,7 +418,6 @@ with clock_cols[1]:
             first_in_time = clock_in_records.iloc[0]["time"]
             target_out_time = calculate_target_checkout(first_in_time)
             
-            # 情況 B: 未滿 9 小時 -> 暫緩寫入，跳出確認選項
             if not is_work_duration_sufficient(first_in_time, current_time_str):
                 st.session_state.pending_clock_out = {
                     "emp_id": current_emp,
@@ -416,13 +430,12 @@ with clock_cols[1]:
                 }
                 st.rerun()
             else:
-                # 情況 C: 工時已滿 9 小時 -> 直接寫入
                 st.session_state.pending_clock_out = None
                 add_record(current_emp, selected_date_str, current_time_str, "下班")
                 st.toast(f"✅ {current_emp} {t('clock_out_success')}：{current_time_str}", icon="👋")
                 st.rerun()
 
-st.caption(f"{t('auto_record_hint')}：**{current_time_str}**")
+st.caption(f"{t('auto_record_hint')}：**{current_time_str}** (UTC+8)")
 
 st.markdown("---")
 
