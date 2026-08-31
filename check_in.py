@@ -1,13 +1,13 @@
 """
 程式名稱: checkin.py
-版本: V1.3
+版本: V1.4
 更新內容:
-1. 時區校正：全面鎖定台灣時區 (Asia/Taipei, UTC+8)，解決雲端主機時間差 8 小時的問題
-2. 日期自動鎖定：開啟系統時自動帶入當天日期，免去手動切換
-3. 滿 9 小時工時檢核二次確認防呆機制 (未滿時跳出 OK / 不OK 選項)
-4. 員工打卡紀錄隱私隔離 (僅呈現選定員工紀錄)
+1. 人員新增: 加入「采妍」
+2. 介面視覺大幅升級: 當日個人打卡紀錄改為「大字體看板卡片 (KPI Blocks)」與醒目標籤
+3. 台灣時區鎖定 (Asia/Taipei, UTC+8) 與開啟自動帶入當天日期
+4. 滿 9 小時工時檢核二次確認防呆機制 (OK / 不OK 彈窗)
 5. 自由 Key-in 修改/補登時間 (HH:MM 格式)
-6. 繁體中文 / Bahasa Indonesia 雙語一鍵切換
+6. 繁體中文 / Bahasa Indonesia 雙語切換
 """
 
 import streamlit as st
@@ -20,14 +20,13 @@ import re
 from zoneinfo import ZoneInfo
 
 # ==================== 系統常數與時區設定 ====================
-APP_VERSION = "V1.3"
+APP_VERSION = "V1.4"
 TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 
-# 員工清單 (可依需求自訂呈現名稱)
-EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都發)", "OFW003(菲娜)"]
+# 員工清單 (包含新加入的「采妍」)
+EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都發)", "OFW003(菲娜)", "采妍"]
 DB_FILE = "attendance.db"
 
-# 取得台灣當前時間與日期的輔助函數
 def get_current_tw_datetime():
     return datetime.datetime.now(TZ_TAIPEI)
 
@@ -47,7 +46,7 @@ TRANSLATIONS = {
         "no_export_data": "該範圍尚無打卡資料可供匯出。",
         "sys_version": "系統版本",
         "lang_label": "🌐 語言切換 (Bahasa)",
-        "step1_select_emp": "1. 請選擇員工編號 (Pilih ID Karyawan)",
+        "step1_select_emp": "1. 請選擇員工 (Pilih Karyawan)",
         "current_selected": "目前已選擇員工",
         "step2_clock": "2. 立即打卡 (Clock In / Out)",
         "clock_in": "🟢 上班 (Masuk)",
@@ -55,7 +54,15 @@ TRANSLATIONS = {
         "clock_in_success": "上班打卡成功！時間",
         "clock_out_success": "下班打卡成功！時間",
         "auto_record_hint": "⚡ 點擊按鈕將自動記錄當前電腦時間",
-        "today_records": "📋 當日個人打卡紀錄",
+        "today_records": "📋 當日出勤狀態看板",
+        "card_clock_in": "🟢 上班時間 (Masuk)",
+        "card_clock_out": "🔴 下班時間 (Pulang)",
+        "card_duration": "⏱️ 當日出勤狀態",
+        "status_working": "💼 上班中 (Working)",
+        "status_completed": "✅ 已下班 (滿 {h} 小時 {m} 分)",
+        "status_under_hours": "⚠️ 提前下班 ({h} 小時 {m} 分)",
+        "status_not_started": "未開始",
+        "detailed_logs": "📝 打卡時間明細",
         "no_today_records": "今日尚無打卡資料。",
         "col_emp": "員工編號",
         "col_type": "打卡類型",
@@ -94,7 +101,7 @@ TRANSLATIONS = {
         "no_export_data": "Tidak ada data untuk diekspor.",
         "sys_version": "Versi Sistem",
         "lang_label": "🌐 Pilih Bahasa (語言)",
-        "step1_select_emp": "1. Pilih ID Karyawan (請選擇員工編號)",
+        "step1_select_emp": "1. Pilih Karyawan (請選擇員工)",
         "current_selected": "Karyawan Terpilih",
         "step2_clock": "2. Tekan Tombol Absensi (立即打卡)",
         "clock_in": "🟢 Masuk (Clock-In)",
@@ -102,7 +109,15 @@ TRANSLATIONS = {
         "clock_in_success": "Absensi Masuk Berhasil! Waktu",
         "clock_out_success": "Absensi Pulang Berhasil! Waktu",
         "auto_record_hint": "⚡ Tombol akan mencatat waktu komputer saat ini",
-        "today_records": "📋 Catatan Absensi Pribadi Hari Ini",
+        "today_records": "📋 Papan Status Kehadiran Hari Ini",
+        "card_clock_in": "🟢 Jam Masuk (Clock-In)",
+        "card_clock_out": "🔴 Jam Pulang (Clock-Out)",
+        "card_duration": "⏱️ Status Kerja Hari Ini",
+        "status_working": "💼 Sedang Bekerja (Working)",
+        "status_completed": "✅ Selesai ({h} jam {m} mnt)",
+        "status_under_hours": "⚠️ Pulang Awal ({h} jam {m} mnt)",
+        "status_not_started": "Belum Mulai",
+        "detailed_logs": "📝 Rincian Waktu Absensi",
         "no_today_records": "Belum ada catatan absensi hari ini.",
         "col_emp": "ID Karyawan",
         "col_type": "Tipe Absen",
@@ -136,6 +151,44 @@ st.set_page_config(
     layout="wide"
 )
 
+# 自訂 CSS: 強化按鈕與看板字體
+st.markdown("""
+    <style>
+    .metric-card {
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        padding: 16px 20px;
+        border: 1px solid #e9ecef;
+        text-align: center;
+    }
+    .metric-title {
+        font-size: 1.05rem;
+        color: #6c757d;
+        margin-bottom: 6px;
+        font-weight: 600;
+    }
+    .metric-value {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: #212529;
+    }
+    .badge-in {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: bold;
+    }
+    .badge-out {
+        background-color: #f8d7da;
+        color: #721c24;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-weight: bold;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # Session State 初始化
 if "lang" not in st.session_state:
     st.session_state.lang = "zh"
@@ -166,12 +219,15 @@ def calculate_target_checkout(in_time_str):
     out_m = out_mins % 60
     return f"{out_h:02d}:{out_m:02d}"
 
-def is_work_duration_sufficient(in_time_str, out_time_str):
+def get_work_duration_minutes(in_time_str, out_time_str):
     h1, m1 = map(int, in_time_str.split(":"))
     h2, m2 = map(int, out_time_str.split(":"))
     mins1 = h1 * 60 + m1
     mins2 = h2 * 60 + m2
-    return (mins2 - mins1) >= (9 * 60)
+    return mins2 - mins1
+
+def is_work_duration_sufficient(in_time_str, out_time_str):
+    return get_work_duration_minutes(in_time_str, out_time_str) >= (9 * 60)
 
 # ==================== 資料庫初始化與操作 ====================
 def get_db_connection():
@@ -272,8 +328,8 @@ def generate_excel_export(df_records):
 
     for idx, row in df_records.iterrows():
         r_num = 5 + idx
-        # 匯出時若有包含括號名字，自動擷取前面的員工編號代碼 (如 OFW001)
         raw_emp = str(row["emp_id"])
+        # 若有括號擷取前方代碼，若無(如采妍)則直接使用名稱
         emp_code = raw_emp.split("(")[0].strip() if "(" in raw_emp else raw_emp
         
         ws.cell(row=r_num, column=1, value=idx + 1)
@@ -292,7 +348,6 @@ def generate_excel_export(df_records):
     return buffer
 
 # ==================== 側邊欄：日期選擇、語系與匯出 ====================
-# 取得台灣當前的精準時間
 now_tw = get_current_tw_datetime()
 today_tw = now_tw.date()
 
@@ -310,8 +365,6 @@ with st.sidebar:
 
     st.markdown("---")
     st.header(t("date_mgmt"))
-    
-    # 預設自動帶入台灣今日日期 (today_tw)
     selected_date = st.date_input(t("select_date"), today_tw)
     selected_date_str = selected_date.strftime("%Y/%m/%d")
     
@@ -356,7 +409,7 @@ with st.sidebar:
 st.title(f"⏰ {t('title')} ({APP_VERSION})")
 st.markdown("---")
 
-# 1. 選擇員工編號
+# 1. 選擇員工
 st.subheader(t("step1_select_emp"))
 emp_cols = st.columns(len(EMPLOYEES))
 for i, emp in enumerate(EMPLOYEES):
@@ -388,7 +441,7 @@ if st.session_state.pending_clock_out and st.session_state.pending_clock_out["em
                 st.rerun()
     st.markdown("---")
 
-# 3. 即時打卡按鈕 (以台灣時區時間為準)
+# 3. 即時打卡按鈕
 st.subheader(t("step2_clock"))
 clock_cols = st.columns(2)
 
@@ -439,20 +492,79 @@ st.caption(f"{t('auto_record_hint')}：**{current_time_str}** (UTC+8)")
 
 st.markdown("---")
 
-# 4. 當日個人打卡紀錄 (隱私隔離)
+# 4. 當日出勤狀態看板 (大字體 KPI 卡片 + 專業視覺優化)
 st.subheader(f"{t('today_records')} - {current_emp} ({selected_date_str})")
 
+# 提取上班與下班資訊
+in_records = emp_today_records[emp_today_records["type"] == "上班"]
+out_records = emp_today_records[emp_today_records["type"] == "下班"]
+
+disp_in_time = in_records.iloc[0]["time"] if not in_records.empty else "--:--"
+disp_out_time = out_records.iloc[-1]["time"] if not out_records.empty else "--:--"
+
+# 計算工時狀態
+if not in_records.empty and not out_records.empty:
+    first_in = in_records.iloc[0]["time"]
+    last_out = out_records.iloc[-1]["time"]
+    dur_mins = get_work_duration_minutes(first_in, last_out)
+    if dur_mins >= 0:
+        h = dur_mins // 60
+        m = dur_mins % 60
+        if dur_mins >= (9 * 60):
+            disp_status = t("status_completed").format(h=h, m=m)
+        else:
+            disp_status = t("status_under_hours").format(h=h, m=m)
+    else:
+        disp_status = "--"
+elif not in_records.empty:
+    disp_status = t("status_working")
+else:
+    disp_status = t("status_not_started")
+
+# 渲染三大卡片
+col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
+with col_kpi1:
+    st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">{t('card_clock_in')}</div>
+            <div class="metric-value" style="color: #28a745;">{disp_in_time}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+with col_kpi2:
+    st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">{t('card_clock_out')}</div>
+            <div class="metric-value" style="color: #dc3545;">{disp_out_time}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+with col_kpi3:
+    st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">{t('card_duration')}</div>
+            <div class="metric-value" style="font-size: 1.35rem; line-height: 2.2rem; color: #007bff;">{disp_status}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+st.write("")
+
+# 打卡明細清單
 if not emp_today_records.empty:
-    display_df = emp_today_records[["emp_id", "type", "time"]].copy()
-    display_df["type"] = display_df["type"].apply(lambda x: t("type_in") if x == "上班" else t("type_out"))
-    display_df = display_df.rename(columns={
-        "emp_id": t("col_emp"),
-        "type": t("col_type"),
-        "time": t("col_time")
-    })
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    with st.expander(t("detailed_logs"), expanded=True):
+        for _, row in emp_today_records.iterrows():
+            badge_class = "badge-in" if row["type"] == "上班" else "badge-out"
+            type_text = t("type_in") if row["type"] == "上班" else t("type_out")
+            st.markdown(f"""
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; margin-bottom: 8px; background-color: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 1.15rem;">
+                    <div><span class="{badge_class}">{type_text}</span> &nbsp;&nbsp; <strong>{row['emp_id']}</strong></div>
+                    <div style="font-family: monospace; font-size: 1.3rem; font-weight: 700; color: #334155;">{row['time']}</div>
+                </div>
+            """, unsafe_allow_html=True)
 else:
     st.info(f"{current_emp} {t('no_today_records')}")
+
+st.markdown("---")
 
 # 5. 補登與編輯管理區
 with st.expander(t("tools_title")):
