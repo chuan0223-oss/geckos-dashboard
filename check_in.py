@@ -476,12 +476,15 @@ with st.sidebar:
     st.markdown("---")
     
     # 🌟 新增：手動立即存入本機按鈕
-    if st.button(t("btn_save_local"), use_container_width=True, type="primary"):
-        saved_path, count = save_excel_to_local(selected_date_str)
-        if saved_path:
-            st.success(t("msg_local_saved").format(path=saved_path))
-        else:
-            st.warning(t("msg_local_empty"))
+ if st.button(t("btn_save_local"), use_container_width=True, type="primary"):
+        try:
+            saved_path, count = save_excel_to_local(selected_date_str)
+            if saved_path:
+                st.success(f"✅ 成功存入！筆數: {count} 筆\n路徑: {saved_path}")
+            else:
+                st.warning(f"⚠️ 選擇的日期 ({selected_date_str}) 資料庫中無任何打卡紀錄，故未產出檔案。")
+        except Exception as e:
+            st.error(f"❌ 存檔失敗，發生系統錯誤：\n{e}")
 
     st.markdown("---")
     st.markdown(f"**{t('auto_export_title')}**")
