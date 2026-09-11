@@ -1,10 +1,14 @@
 """
 程式名稱: checkin.py
-版本: V1.6
+版本: V1.6.1
 更新內容:
-1. 新增「立即手動存入本機」按鈕：一鍵將當日打卡紀錄存入本機指定資料夾
-2. 調整本機預設存檔路徑至使用者文件夾內 (避免 C:\ 根目錄權限不足問題)
-3. 保留每日 23:00 背景自動匯出、動態下載按鈕、隱私隔離、工時防呆與雙語切換
+1. 優化本機存檔邏輯：即使當日尚無打卡資料，手動點擊或定時匯出也會產出標準表頭的 Excel 檔案
+2. 內建每日 23:00 背景自動匯出至本機 (預設路徑: D:\打卡匯出紀錄)
+3. 側邊欄新增「立即手動存入本機」按鈕 (具備詳細防呆與錯誤提示)
+4. 支援 4 位人員: OFW001(溫蒂)、OFW002(都發)、OFW003(菲娜)、采妍
+5. 台灣時區鎖定 (Asia/Taipei, UTC+8) 與自動鎖定當日日期
+6. 滿 9 小時工時二次確認防呆機制 (OK / 不OK 彈窗)
+7. 繁體中文 / Bahasa Indonesia 雙語切換
 """
 
 import os
@@ -20,14 +24,14 @@ import re
 from zoneinfo import ZoneInfo
 
 # ==================== 系統常數、路徑與時區設定 ====================
-APP_VERSION = "V1.6"
+APP_VERSION = "V1.6.1"
 TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 
-# 建議改用使用者文件夾，避免 C:\ 根目錄權限不足 (PermissionError)
-DEFAULT_EXPORT_DIR =r"D:\打卡匯出紀錄"
+# 設定您的本機儲存資料夾 (若使用 Windows D 槽請確保該磁碟存在)
+DEFAULT_EXPORT_DIR = r"D:\打卡匯出紀錄"
 DB_FILE = "attendance.db"
 
-EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都発)", "OFW003(菲娜)", "采妍"]
+EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都發)", "OFW003(菲娜)", "采妍"]
 
 def get_current_tw_datetime():
     return datetime.datetime.now(TZ_TAIPEI)
@@ -48,8 +52,7 @@ TRANSLATIONS = {
         "no_export_data": "該範圍尚無打卡資料可供匯出。",
         "export_preview": "已抓取 {count} 筆資料",
         "btn_save_local": "💾 立即手動存入本機",
-        "msg_local_saved": "✅ 成功手動存入本機資料夾：\n{path}",
-        "msg_local_empty": "⚠️ 今日尚無打卡資料，無法存入本機。",
+        "msg_local_saved": "✅ 成功存入本機資料夾！\n筆數: {count} 筆\n路徑: {path}",
         "sys_version": "系統版本",
         "auto_export_title": "🤖 背景自動匯出狀態",
         "auto_export_info": "每日 23:00 自動存入：\n`{path}`",
@@ -110,8 +113,7 @@ TRANSLATIONS = {
         "no_export_data": "Tidak ada data untuk diekspor.",
         "export_preview": "Ditemukan {count} data",
         "btn_save_local": "💾 Simpan Manual ke Lokal",
-        "msg_local_saved": "✅ Berhasil menyimpan ke folder lokal:\n{path}",
-        "msg_local_empty": "⚠️ Belum ada data absensi hari ini.",
+        "msg_local_saved": "✅ Berhasil menyimpan ke folder lokal!\nJumlah: {count} data\nPath: {path}",
         "sys_version": "Versi Sistem",
         "auto_export_title": "🤖 Status Ekspor Otomatis",
         "auto_export_info": "Otomatis disimpan pukul 23:00 ke:\n`{path}`",
@@ -362,30 +364,25 @@ def generate_excel_export(df_records):
     buffer.seek(0)
     return buffer
 
-# 實體檔案寫入硬碟邏輯
+# 實體檔案寫入硬碟邏輯 (即使無資料也會產出包含標準表頭的檔案)
 def save_excel_to_local(target_date_str):
     date_tag = target_date_str.replace("/", "")
     if not os.path.exists(DEFAULT_EXPORT_DIR):
         os.makedirs(DEFAULT_EXPORT_DIR, exist_ok=True)
         
     df_data = get_all_records_by_date(target_date_str)
-    if not df_data.empty:
-        excel_buffer = generate_excel_export(df_data)
-        file_path = os.path.join(DEFAULT_EXPORT_DIR, f"打卡匯出_{date_tag}.xlsx")
-        with open(file_path, "wb") as f:
-            f.write(excel_buffer.getbuffer())
-        return file_path, len(df_data)
-    return None, 0
+    excel_buffer = generate_excel_export(df_data)
+    file_path = os.path.join(DEFAULT_EXPORT_DIR, f"打卡匯出_{date_tag}.xlsx")
+    with open(file_path, "wb") as f:
+        f.write(excel_buffer.getbuffer())
+    return file_path, len(df_data)
 
 # ==================== 每日 23:00 自動匯出背景執行緒 ====================
 def auto_save_daily_excel():
     now = datetime.datetime.now(TZ_TAIPEI)
     today_str = now.strftime("%Y/%m/%d")
     path, count = save_excel_to_local(today_str)
-    if path:
-        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 自動匯出成功：{path} (共 {count} 筆)")
-    else:
-        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 今日無打卡紀錄，略過自動匯出。")
+    print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 自動匯出完成：{path} (共 {count} 筆打卡資料)")
 
 def background_scheduler():
     last_exported_date = None
@@ -456,11 +453,10 @@ with st.sidebar:
         export_df = get_all_records()
         file_suffix = "ALL"
         
-   if not export_df.empty:
+    if not export_df.empty:
         st.caption(f"📊 {t('export_preview').format(count=len(export_df))}")
         excel_data = generate_excel_export(export_df)
         
-        # 綁定動態 key，解決快取鎖死
         dynamic_btn_key = f"dl_{export_range}_{file_suffix}_{len(export_df)}"
         st.download_button(
             label=t("download_excel"),
@@ -475,14 +471,11 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # 具備詳細報錯提示的手動存入按鈕
+    # 🌟 手動立即存入本機按鈕 (具備詳細除錯與防呆提示)
     if st.button(t("btn_save_local"), use_container_width=True, type="primary"):
         try:
             saved_path, count = save_excel_to_local(selected_date_str)
-            if saved_path:
-                st.success(f"✅ 成功存入！筆數: {count} 筆\n路徑: {saved_path}")
-            else:
-                st.warning(f"⚠️ 選擇的日期 ({selected_date_str}) 資料庫中無任何打卡紀錄，故未產出檔案。")
+            st.success(t("msg_local_saved").format(count=count, path=saved_path))
         except Exception as e:
             st.error(f"❌ 存檔失敗，發生系統錯誤：\n{e}")
 
