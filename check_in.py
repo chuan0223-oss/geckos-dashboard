@@ -1,19 +1,26 @@
 """
-程式名稱: checkin.py
-版本: V1.6.1
+程式名稱: check_in.py (或 checkin.py)
+版本: V1.7
 更新內容:
-1. 優化本機存檔邏輯：即使當日尚無打卡資料，手動點擊或定時匯出也會產出標準表頭的 Excel 檔案
-2. 內建每日 23:00 背景自動匯出至本機 (預設路徑: D:\打卡匯出紀錄)
-3. 側邊欄新增「立即手動存入本機」按鈕 (具備詳細防呆與錯誤提示)
-4. 支援 4 位人員: OFW001(溫蒂)、OFW002(都發)、OFW003(菲娜)、采妍
-5. 台灣時區鎖定 (Asia/Taipei, UTC+8) 與自動鎖定當日日期
-6. 滿 9 小時工時二次確認防呆機制 (OK / 不OK 彈窗)
-7. 繁體中文 / Bahasa Indonesia 雙語切換
+1. 整合 Gmail SMTP 寄信功能 (自動讀取 Streamlit Secrets)
+2. 每日 23:00 背景自動寄送當日 Excel 匯出檔至指定信箱
+3. 側邊欄新增「立即寄送紀錄至 Email」按鈕 (支援手動測試與即時補寄)
+4. 修正下載按鈕快取鎖死問題 (動態 key 機制)
+5. 支援 4 位人員: OFW001(溫蒂)、OFW002(都發)、OFW003(菲娜)、采妍
+6. 台灣時區鎖定 (Asia/Taipei, UTC+8) 與自動帶入當天日期
+7. 滿 9 小時工時二次確認防呆機制 (OK / 不OK 彈窗)
+8. 繁體中文 / Bahasa Indonesia 雙語即時切換
 """
 
 import os
 import threading
 import time
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -23,12 +30,9 @@ import openpyxl
 import re
 from zoneinfo import ZoneInfo
 
-# ==================== 系統常數、路徑與時區設定 ====================
-APP_VERSION = "V1.6.1"
+# ==================== 系統常數與時區設定 ====================
+APP_VERSION = "V1.7"
 TZ_TAIPEI = ZoneInfo("Asia/Taipei")
-
-# 設定您的本機儲存資料夾 (若使用 Windows D 槽請確保該磁碟存在)
-DEFAULT_EXPORT_DIR = r"D:\打卡匯出紀錄"
 DB_FILE = "attendance.db"
 
 EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都發)", "OFW003(菲娜)", "采妍"]
@@ -51,11 +55,11 @@ TRANSLATIONS = {
         "download_excel": "📥 下載 Excel (匯入格式)",
         "no_export_data": "該範圍尚無打卡資料可供匯出。",
         "export_preview": "已抓取 {count} 筆資料",
-        "btn_save_local": "💾 立即手動存入本機",
-        "msg_local_saved": "✅ 成功存入本機資料夾！\n筆數: {count} 筆\n路徑: {path}",
+        "btn_send_email": "📧 立即寄送紀錄至 Email",
+        "msg_email_sent": "✅ 成功寄出！已發送至：{receiver}（共 {count} 筆紀錄）",
         "sys_version": "系統版本",
-        "auto_export_title": "🤖 背景自動匯出狀態",
-        "auto_export_info": "每日 23:00 自動存入：\n`{path}`",
+        "auto_export_title": "🤖 每日 23:00 自動寄信狀態",
+        "auto_export_info": "每日 23:00 自動將當日 Excel 寄至指定信箱",
         "auto_export_active": "🟢 排程常駐中 (Active)",
         "lang_label": "🌐 語言切換 (Bahasa)",
         "step1_select_emp": "1. 請選擇員工 (Pilih Karyawan)",
@@ -112,11 +116,11 @@ TRANSLATIONS = {
         "download_excel": "📥 Unduh Excel (Format Impor)",
         "no_export_data": "Tidak ada data untuk diekspor.",
         "export_preview": "Ditemukan {count} data",
-        "btn_save_local": "💾 Simpan Manual ke Lokal",
-        "msg_local_saved": "✅ Berhasil menyimpan ke folder lokal!\nJumlah: {count} data\nPath: {path}",
+        "btn_send_email": "📧 Kirim Data ke Email",
+        "msg_email_sent": "✅ Berhasil dikirim ke: {receiver} ({count} data)",
         "sys_version": "Versi Sistem",
-        "auto_export_title": "🤖 Status Ekspor Otomatis",
-        "auto_export_info": "Otomatis disimpan pukul 23:00 ke:\n`{path}`",
+        "auto_export_title": "🤖 Status Kirim Email Otomatis",
+        "auto_export_info": "Otomatis dikirim ke email setiap pukul 23:00",
         "auto_export_active": "🟢 Penjadwal Aktif (Active)",
         "lang_label": "🌐 Pilih Bahasa (語言)",
         "step1_select_emp": "1. Pilih Karyawan (請選擇員工)",
@@ -364,25 +368,56 @@ def generate_excel_export(df_records):
     buffer.seek(0)
     return buffer
 
-# 實體檔案寫入硬碟邏輯 (即使無資料也會產出包含標準表頭的檔案)
-def save_excel_to_local(target_date_str):
-    date_tag = target_date_str.replace("/", "")
-    if not os.path.exists(DEFAULT_EXPORT_DIR):
-        os.makedirs(DEFAULT_EXPORT_DIR, exist_ok=True)
-        
+# ==================== Email 寄送函式 ====================
+def send_attendance_email(target_date_str):
+    """抓取指定日期的打卡資料並透過 Gmail 發送附件"""
+    if "email" not in st.secrets:
+        raise ValueError("未在 Streamlit Cloud Secrets 中設定 [email] 區塊！請先至後台 Settings -> Secrets 填寫。")
+    
+    mail_conf = st.secrets["email"]
+    sender = mail_conf["sender"]
+    password = mail_conf["password"].strip()
+    receiver = mail_conf["receiver"]
+    smtp_server = mail_conf.get("smtp_server", "smtp.gmail.com")
+    smtp_port = int(mail_conf.get("smtp_port", 587))
+    
     df_data = get_all_records_by_date(target_date_str)
     excel_buffer = generate_excel_export(df_data)
-    file_path = os.path.join(DEFAULT_EXPORT_DIR, f"打卡匯出_{date_tag}.xlsx")
-    with open(file_path, "wb") as f:
-        f.write(excel_buffer.getbuffer())
-    return file_path, len(df_data)
+    
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = receiver
+    msg['Subject'] = f"【出勤紀錄】{target_date_str} 外籍移工打卡匯出檔"
+    
+    body = (
+        f"您好，\n\n"
+        f"附件為 {target_date_str} 的外籍移工出勤打卡匯出 Excel 檔案。\n"
+        f"當日共計 {len(df_data)} 筆打卡紀錄。\n\n"
+        f"此信件由出勤打卡系統 ({APP_VERSION}) 自動發送。"
+    )
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    
+    date_tag = target_date_str.replace("/", "")
+    part = MIMEBase('application', 'octet-stream')
+    part.set_payload(excel_buffer.getvalue())
+    encoders.encode_base64(part)
+    part.add_header('Content-Disposition', f'attachment; filename="打卡匯出_{date_tag}.xlsx"')
+    msg.attach(part)
+    
+    server = smtplib.SMTP(smtp_server, smtp_port)
+    server.starttls()
+    server.login(sender, password)
+    server.send_message(msg)
+    server.quit()
+    
+    return len(df_data), receiver
 
-# ==================== 每日 23:00 自動匯出背景執行緒 ====================
-def auto_save_daily_excel():
+# ==================== 每日 23:00 自動寄信背景執行緒 ====================
+def auto_send_daily_email():
     now = datetime.datetime.now(TZ_TAIPEI)
     today_str = now.strftime("%Y/%m/%d")
-    path, count = save_excel_to_local(today_str)
-    print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 自動匯出完成：{path} (共 {count} 筆打卡資料)")
+    count, receiver = send_attendance_email(today_str)
+    print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 23:00 自動寄信成功！寄送至 {receiver} (共 {count} 筆打卡資料)")
 
 def background_scheduler():
     last_exported_date = None
@@ -390,22 +425,23 @@ def background_scheduler():
         now = datetime.datetime.now(TZ_TAIPEI)
         today_str = now.strftime("%Y/%m/%d")
         
+        # 觸發條件：抵達 23:00 且當天尚未寄出
         if now.hour == 23 and now.minute == 0 and last_exported_date != today_str:
             try:
-                auto_save_daily_excel()
+                auto_send_daily_email()
                 last_exported_date = today_str
             except Exception as err:
-                print(f"自動匯出執行失敗: {err}")
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 自動寄信執行失敗: {err}")
                 
         time.sleep(30)
 
 @st.cache_resource
-def start_export_scheduler():
+def start_email_scheduler():
     thread = threading.Thread(target=background_scheduler, daemon=True)
     thread.start()
     return True
 
-start_export_scheduler()
+start_email_scheduler()
 
 # ==================== 側邊欄：日期選擇、語系與匯出 ====================
 now_tw = get_current_tw_datetime()
@@ -471,17 +507,18 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # 🌟 手動立即存入本機按鈕 (具備詳細除錯與防呆提示)
-    if st.button(t("btn_save_local"), use_container_width=True, type="primary"):
+    # 🌟 立即手動寄送 Email 按鈕
+    if st.button(t("btn_send_email"), use_container_width=True, type="primary"):
         try:
-            saved_path, count = save_excel_to_local(selected_date_str)
-            st.success(t("msg_local_saved").format(count=count, path=saved_path))
+            with st.spinner("正在發送郵件..."):
+                count, receiver = send_attendance_email(selected_date_str)
+            st.success(t("msg_email_sent").format(receiver=receiver, count=count))
         except Exception as e:
-            st.error(f"❌ 存檔失敗，發生系統錯誤：\n{e}")
+            st.error(f"❌ 寄信失敗：\n{e}")
 
     st.markdown("---")
     st.markdown(f"**{t('auto_export_title')}**")
-    st.caption(t("auto_export_info").format(path=DEFAULT_EXPORT_DIR))
+    st.caption(t("auto_export_info"))
     st.caption(t("auto_export_active"))
 
     st.markdown("---")
