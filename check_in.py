@@ -24,7 +24,7 @@ APP_VERSION = "V1.6"
 TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 
 # 建議改用使用者文件夾，避免 C:\ 根目錄權限不足 (PermissionError)
-DEFAULT_EXPORT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "打卡匯出紀錄")
+DEFAULT_EXPORT_DIR =r"C:\打卡匯出紀錄"
 DB_FILE = "attendance.db"
 
 EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都発)", "OFW003(菲娜)", "采妍"]
