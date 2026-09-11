@@ -1,13 +1,10 @@
 """
 程式名稱: checkin.py
-版本: V1.5
+版本: V1.6
 更新內容:
-1. 內建每日 23:00 背景自動匯出至硬碟 (預設路徑: C:\打卡匯出紀錄)
-2. 修復手動下載按鈕快取鎖死問題 (動態 key 刷新機制)
-3. 支援人員: OFW001(溫蒂)、OFW002(都發)、OFW003(菲娜)、采妍
-4. 台灣時區鎖定 (Asia/Taipei, UTC+8) 與自動鎖定當日日期
-5. 滿 9 小時工時二次確認防呆機制 (OK / 不OK 彈窗)
-6. 繁體中文 / Bahasa Indonesia 雙語切換
+1. 新增「立即手動存入本機」按鈕：一鍵將當日打卡紀錄存入本機指定資料夾
+2. 調整本機預設存檔路徑至使用者文件夾內 (避免 C:\ 根目錄權限不足問題)
+3. 保留每日 23:00 背景自動匯出、動態下載按鈕、隱私隔離、工時防呆與雙語切換
 """
 
 import os
@@ -23,12 +20,14 @@ import re
 from zoneinfo import ZoneInfo
 
 # ==================== 系統常數、路徑與時區設定 ====================
-APP_VERSION = "V1.5"
+APP_VERSION = "V1.6"
 TZ_TAIPEI = ZoneInfo("Asia/Taipei")
-AUTO_EXPORT_DIR = r"C:\打卡匯出紀錄"  # 自動匯出目標資料夾
+
+# 建議改用使用者文件夾，避免 C:\ 根目錄權限不足 (PermissionError)
+DEFAULT_EXPORT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "打卡匯出紀錄")
 DB_FILE = "attendance.db"
 
-EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都發)", "OFW003(菲娜)", "采妍"]
+EMPLOYEES = ["OFW001(溫蒂)", "OFW002(都発)", "OFW003(菲娜)", "采妍"]
 
 def get_current_tw_datetime():
     return datetime.datetime.now(TZ_TAIPEI)
@@ -48,9 +47,12 @@ TRANSLATIONS = {
         "download_excel": "📥 下載 Excel (匯入格式)",
         "no_export_data": "該範圍尚無打卡資料可供匯出。",
         "export_preview": "已抓取 {count} 筆資料",
+        "btn_save_local": "💾 立即手動存入本機",
+        "msg_local_saved": "✅ 成功手動存入本機資料夾：\n{path}",
+        "msg_local_empty": "⚠️ 今日尚無打卡資料，無法存入本機。",
         "sys_version": "系統版本",
         "auto_export_title": "🤖 背景自動匯出狀態",
-        "auto_export_info": "每日 23:00 自動存入本機：\n`{path}`",
+        "auto_export_info": "每日 23:00 自動存入：\n`{path}`",
         "auto_export_active": "🟢 排程常駐中 (Active)",
         "lang_label": "🌐 語言切換 (Bahasa)",
         "step1_select_emp": "1. 請選擇員工 (Pilih Karyawan)",
@@ -107,6 +109,9 @@ TRANSLATIONS = {
         "download_excel": "📥 Unduh Excel (Format Impor)",
         "no_export_data": "Tidak ada data untuk diekspor.",
         "export_preview": "Ditemukan {count} data",
+        "btn_save_local": "💾 Simpan Manual ke Lokal",
+        "msg_local_saved": "✅ Berhasil menyimpan ke folder lokal:\n{path}",
+        "msg_local_empty": "⚠️ Belum ada data absensi hari ini.",
         "sys_version": "Versi Sistem",
         "auto_export_title": "🤖 Status Ekspor Otomatis",
         "auto_export_info": "Otomatis disimpan pukul 23:00 ke:\n`{path}`",
@@ -162,7 +167,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 自訂 CSS: 看板與標籤排版
+# 自訂 CSS
 st.markdown("""
     <style>
     .metric-card {
@@ -240,7 +245,7 @@ def get_work_duration_minutes(in_time_str, out_time_str):
 def is_work_duration_sufficient(in_time_str, out_time_str):
     return get_work_duration_minutes(in_time_str, out_time_str) >= (9 * 60)
 
-# ==================== 資料庫初始化與操作 ====================
+# ==================== 資料庫操作 ====================
 def get_db_connection():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -317,7 +322,7 @@ def delete_record(record_id):
     conn.commit()
     conn.close()
 
-# ==================== Excel 匯出函數 ====================
+# ==================== Excel 產生核心函數 ====================
 def generate_excel_export(df_records):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -357,22 +362,28 @@ def generate_excel_export(df_records):
     buffer.seek(0)
     return buffer
 
+# 實體檔案寫入硬碟邏輯
+def save_excel_to_local(target_date_str):
+    date_tag = target_date_str.replace("/", "")
+    if not os.path.exists(DEFAULT_EXPORT_DIR):
+        os.makedirs(DEFAULT_EXPORT_DIR, exist_ok=True)
+        
+    df_data = get_all_records_by_date(target_date_str)
+    if not df_data.empty:
+        excel_buffer = generate_excel_export(df_data)
+        file_path = os.path.join(DEFAULT_EXPORT_DIR, f"打卡匯出_{date_tag}.xlsx")
+        with open(file_path, "wb") as f:
+            f.write(excel_buffer.getbuffer())
+        return file_path, len(df_data)
+    return None, 0
+
 # ==================== 每日 23:00 自動匯出背景執行緒 ====================
 def auto_save_daily_excel():
     now = datetime.datetime.now(TZ_TAIPEI)
     today_str = now.strftime("%Y/%m/%d")
-    date_tag = now.strftime("%Y%m%d")
-    
-    if not os.path.exists(AUTO_EXPORT_DIR):
-        os.makedirs(AUTO_EXPORT_DIR, exist_ok=True)
-        
-    df_today = get_all_records_by_date(today_str)
-    if not df_today.empty:
-        excel_buffer = generate_excel_export(df_today)
-        target_path = os.path.join(AUTO_EXPORT_DIR, f"打卡匯出_{date_tag}.xlsx")
-        with open(target_path, "wb") as f:
-            f.write(excel_buffer.getbuffer())
-        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 自動匯出成功：{target_path}")
+    path, count = save_excel_to_local(today_str)
+    if path:
+        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 自動匯出成功：{path} (共 {count} 筆)")
     else:
         print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 今日無打卡紀錄，略過自動匯出。")
 
@@ -382,7 +393,6 @@ def background_scheduler():
         now = datetime.datetime.now(TZ_TAIPEI)
         today_str = now.strftime("%Y/%m/%d")
         
-        # 觸發條件：到達 23:00 且當天尚未執行
         if now.hour == 23 and now.minute == 0 and last_exported_date != today_str:
             try:
                 auto_save_daily_excel()
@@ -398,7 +408,6 @@ def start_export_scheduler():
     thread.start()
     return True
 
-# 啟動背景排程 (整套服務生命週期僅啟動一次)
 start_export_scheduler()
 
 # ==================== 側邊欄：日期選擇、語系與匯出 ====================
@@ -434,7 +443,6 @@ with st.sidebar:
     export_range_label = st.selectbox(t("export_range"), list(range_map.keys()))
     export_range = range_map[export_range_label]
     
-    # 根據範圍撈取完整資料庫紀錄
     if export_range == "day":
         export_df = get_all_records_by_date(selected_date_str)
         file_suffix = selected_date_str.replace('/', '')
@@ -452,7 +460,7 @@ with st.sidebar:
         st.caption(f"📊 {t('export_preview').format(count=len(export_df))}")
         excel_data = generate_excel_export(export_df)
         
-        # 綁定動態 key，保證切換日期或範圍時下載緩存即時刷新
+        # 網頁下載按鈕 (動態 key 解決快取鎖死)
         dynamic_btn_key = f"dl_{export_range}_{file_suffix}_{len(export_df)}"
         st.download_button(
             label=t("download_excel"),
@@ -466,8 +474,18 @@ with st.sidebar:
         st.caption(t("no_export_data"))
 
     st.markdown("---")
+    
+    # 🌟 新增：手動立即存入本機按鈕
+    if st.button(t("btn_save_local"), use_container_width=True, type="primary"):
+        saved_path, count = save_excel_to_local(selected_date_str)
+        if saved_path:
+            st.success(t("msg_local_saved").format(path=saved_path))
+        else:
+            st.warning(t("msg_local_empty"))
+
+    st.markdown("---")
     st.markdown(f"**{t('auto_export_title')}**")
-    st.caption(t("auto_export_info").format(path=AUTO_EXPORT_DIR))
+    st.caption(t("auto_export_info").format(path=DEFAULT_EXPORT_DIR))
     st.caption(t("auto_export_active"))
 
     st.markdown("---")
@@ -561,7 +579,7 @@ st.caption(f"{t('auto_record_hint')}：**{current_time_str}** (UTC+8)")
 st.markdown("---")
 
 # 4. 當日出勤狀態看板 (大字體 KPI 卡片)
-st.subheader(f"{t('today_records')} - {current_emp} ({selected_date_str})")
+st.subheader(t("today_records"))
 
 in_records = emp_today_records[emp_today_records["type"] == "上班"]
 out_records = emp_today_records[emp_today_records["type"] == "下班"]
@@ -614,7 +632,6 @@ with col_kpi3:
 
 st.write("")
 
-# 打卡明細列表
 if not emp_today_records.empty:
     with st.expander(t("detailed_logs"), expanded=True):
         for _, row in emp_today_records.iterrows():
