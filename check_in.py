@@ -1,15 +1,16 @@
 """
-程式名稱: check_in.py (或 checkin.py)
-版本: V1.7
+程式名稱: check_in.py
+版本: V1.8
 更新內容:
-1. 整合 Gmail SMTP 寄信功能 (自動讀取 Streamlit Secrets)
-2. 每日 23:00 背景自動寄送當日 Excel 匯出檔至指定信箱
-3. 側邊欄新增「立即寄送紀錄至 Email」按鈕 (支援手動測試與即時補寄)
-4. 修正下載按鈕快取鎖死問題 (動態 key 機制)
-5. 支援 4 位人員: OFW001(溫蒂)、OFW002(都發)、OFW003(菲娜)、采妍
-6. 台灣時區鎖定 (Asia/Taipei, UTC+8) 與自動帶入當天日期
-7. 滿 9 小時工時二次確認防呆機制 (OK / 不OK 彈窗)
-8. 繁體中文 / Bahasa Indonesia 雙語即時切換
+1. 修復 Email 附件檔名變成 noname 的問題 (標準 MIME 類型與 RFC 檔名分離傳遞)
+2. 整合 Gmail SMTP 寄信功能 (自動讀取 Streamlit Secrets [email] 設定)
+3. 每日 23:00 背景自動寄送當日 Excel 匯出檔至指定信箱
+4. 側邊欄新增「立即寄送紀錄至 Email」按鈕 (支援即時測試與補寄)
+5. 解決手動下載按鈕快取鎖死問題 (動態 key 機制)
+6. 支援 4 位人員: OFW001(溫蒂)、OFW002(都發)、OFW003(菲娜)、采妍
+7. 台灣時區鎖定 (Asia/Taipei, UTC+8) 與自動帶入當天日期
+8. 滿 9 小時工時二次確認防呆機制 (OK / 不OK 彈窗)
+9. 繁體中文 / Bahasa Indonesia 雙語即時切換
 """
 
 import os
@@ -31,7 +32,7 @@ import re
 from zoneinfo import ZoneInfo
 
 # ==================== 系統常數與時區設定 ====================
-APP_VERSION = "V1.7"
+APP_VERSION = "V1.8"
 TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 DB_FILE = "attendance.db"
 
@@ -173,7 +174,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 自訂 CSS
+# 自訂 CSS: 看板卡片與標籤樣式
 st.markdown("""
     <style>
     .metric-card {
@@ -222,7 +223,7 @@ if "pending_clock_out" not in st.session_state:
 def t(key):
     return TRANSLATIONS[st.session_state.lang].get(key, key)
 
-# ==================== 時間檢核與計算 ====================
+# ==================== 時間檢核與工時計算 ====================
 def validate_time_format(time_str):
     if not time_str:
         return None
@@ -368,9 +369,9 @@ def generate_excel_export(df_records):
     buffer.seek(0)
     return buffer
 
-# ==================== Email 寄送函式 ====================
+# ==================== Email 寄送函式 (解決 noname 問題) ====================
 def send_attendance_email(target_date_str):
-    """抓取指定日期的打卡資料並透過 Gmail 發送附件"""
+    """抓取指定日期的打卡資料並透過 Gmail 發送標準 Excel 附件"""
     if "email" not in st.secrets:
         raise ValueError("未在 Streamlit Cloud Secrets 中設定 [email] 區塊！請先至後台 Settings -> Secrets 填寫。")
     
@@ -398,10 +399,15 @@ def send_attendance_email(target_date_str):
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
     
     date_tag = target_date_str.replace("/", "")
-    part = MIMEBase('application', 'octet-stream')
+    filename = f"打卡匯出_{date_tag}.xlsx"
+    
+    # 1. 使用標準 Excel MIME 類型
+    part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     part.set_payload(excel_buffer.getvalue())
     encoders.encode_base64(part)
-    part.add_header('Content-Disposition', f'attachment; filename="打卡匯出_{date_tag}.xlsx"')
+    
+    # 2. 將 'attachment' 與 filename 拆為標準規範參數，避免檔名變成 noname
+    part.add_header('Content-Disposition', 'attachment', filename=filename)
     msg.attach(part)
     
     server = smtplib.SMTP(smtp_server, smtp_port)
