@@ -456,11 +456,11 @@ with st.sidebar:
         export_df = get_all_records()
         file_suffix = "ALL"
         
-    if not export_df.empty:
+   if not export_df.empty:
         st.caption(f"📊 {t('export_preview').format(count=len(export_df))}")
         excel_data = generate_excel_export(export_df)
         
-        # 網頁下載按鈕 (動態 key 解決快取鎖死)
+        # 綁定動態 key，解決快取鎖死
         dynamic_btn_key = f"dl_{export_range}_{file_suffix}_{len(export_df)}"
         st.download_button(
             label=t("download_excel"),
@@ -475,8 +475,8 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # 🌟 新增：手動立即存入本機按鈕
- if st.button(t("btn_save_local"), use_container_width=True, type="primary"):
+    # 具備詳細報錯提示的手動存入按鈕
+    if st.button(t("btn_save_local"), use_container_width=True, type="primary"):
         try:
             saved_path, count = save_excel_to_local(selected_date_str)
             if saved_path:
