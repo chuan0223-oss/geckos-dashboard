@@ -1,16 +1,12 @@
 """
 程式名稱: check_in.py
-版本: V1.8
+版本: V2.0
 更新內容:
-1. 修復 Email 附件檔名變成 noname 的問題 (標準 MIME 類型與 RFC 檔名分離傳遞)
-2. 整合 Gmail SMTP 寄信功能 (自動讀取 Streamlit Secrets [email] 設定)
-3. 每日 23:00 背景自動寄送當日 Excel 匯出檔至指定信箱
-4. 側邊欄新增「立即寄送紀錄至 Email」按鈕 (支援即時測試與補寄)
-5. 解決手動下載按鈕快取鎖死問題 (動態 key 機制)
-6. 支援 4 位人員: OFW001(溫蒂)、OFW002(都發)、OFW003(菲娜)、采妍
-7. 台灣時區鎖定 (Asia/Taipei, UTC+8) 與自動帶入當天日期
-8. 滿 9 小時工時二次確認防呆機制 (OK / 不OK 彈窗)
-9. 繁體中文 / Bahasa Indonesia 雙語即時切換
+1. 自動寄信時間調整: 由每日 23:00 調整為每日 20:00 (台灣時區 UTC+8)
+2. 保持執行緒版本汰換機制 (自動銷毀舊版排程執行緒)
+3. 保持 Email 附件標準格式 (避免 noname)
+4. 包含人員名單: OFW001(溫蒂)、OFW002(都發)、OFW003(菲娜)、采妍
+5. 台灣時區鎖定、滿 9 小時二次確認防呆、大字體看板與繁中/印尼文切換
 """
 
 import os
@@ -32,7 +28,7 @@ import re
 from zoneinfo import ZoneInfo
 
 # ==================== 系統常數與時區設定 ====================
-APP_VERSION = "V1.8"
+APP_VERSION = "V2.0"
 TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 DB_FILE = "attendance.db"
 
@@ -59,8 +55,8 @@ TRANSLATIONS = {
         "btn_send_email": "📧 立即寄送紀錄至 Email",
         "msg_email_sent": "✅ 成功寄出！已發送至：{receiver}（共 {count} 筆紀錄）",
         "sys_version": "系統版本",
-        "auto_export_title": "🤖 每日 23:00 自動寄信狀態",
-        "auto_export_info": "每日 23:00 自動將當日 Excel 寄至指定信箱",
+        "auto_export_title": "🤖 每日 20:00 自動寄信狀態",
+        "auto_export_info": "每日 20:00 自動將當日 Excel 寄至指定信箱",
         "auto_export_active": "🟢 排程常駐中 (Active)",
         "lang_label": "🌐 語言切換 (Bahasa)",
         "step1_select_emp": "1. 請選擇員工 (Pilih Karyawan)",
@@ -121,7 +117,7 @@ TRANSLATIONS = {
         "msg_email_sent": "✅ Berhasil dikirim ke: {receiver} ({count} data)",
         "sys_version": "Versi Sistem",
         "auto_export_title": "🤖 Status Kirim Email Otomatis",
-        "auto_export_info": "Otomatis dikirim ke email setiap pukul 23:00",
+        "auto_export_info": "Otomatis dikirim ke email setiap pukul 20:00",
         "auto_export_active": "🟢 Penjadwal Aktif (Active)",
         "lang_label": "🌐 Pilih Bahasa (語言)",
         "step1_select_emp": "1. Pilih Karyawan (請選擇員工)",
@@ -174,7 +170,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 自訂 CSS: 看板卡片與標籤樣式
+# 自訂 CSS
 st.markdown("""
     <style>
     .metric-card {
@@ -369,7 +365,7 @@ def generate_excel_export(df_records):
     buffer.seek(0)
     return buffer
 
-# ==================== Email 寄送函式 (解決 noname 問題) ====================
+# ==================== Email 寄送函式 ====================
 def send_attendance_email(target_date_str):
     """抓取指定日期的打卡資料並透過 Gmail 發送標準 Excel 附件"""
     if "email" not in st.secrets:
@@ -401,12 +397,10 @@ def send_attendance_email(target_date_str):
     date_tag = target_date_str.replace("/", "")
     filename = f"打卡匯出_{date_tag}.xlsx"
     
-    # 1. 使用標準 Excel MIME 類型
     part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     part.set_payload(excel_buffer.getvalue())
     encoders.encode_base64(part)
     
-    # 2. 將 'attachment' 與 filename 拆為標準規範參數，避免檔名變成 noname
     part.add_header('Content-Disposition', 'attachment', filename=filename)
     msg.attach(part)
     
@@ -418,21 +412,28 @@ def send_attendance_email(target_date_str):
     
     return len(df_data), receiver
 
-# ==================== 每日 23:00 自動寄信背景執行緒 ====================
+# ==================== 每日 20:00 自動寄信背景執行緒 (含版本汰換機制) ====================
+ACTIVE_SCHEDULER_VERSION = APP_VERSION
+
 def auto_send_daily_email():
     now = datetime.datetime.now(TZ_TAIPEI)
     today_str = now.strftime("%Y/%m/%d")
     count, receiver = send_attendance_email(today_str)
-    print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 23:00 自動寄信成功！寄送至 {receiver} (共 {count} 筆打卡資料)")
+    print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 20:00 自動寄信成功！寄送至 {receiver} (共 {count} 筆打卡資料)")
 
-def background_scheduler():
+def background_scheduler(current_ver):
     last_exported_date = None
     while True:
+        # 若系統版本已更新，舊執行緒自動退出循環結束生命週期
+        if current_ver != ACTIVE_SCHEDULER_VERSION:
+            print(f"舊版排程執行緒 ({current_ver}) 自動停止退出。")
+            break
+            
         now = datetime.datetime.now(TZ_TAIPEI)
         today_str = now.strftime("%Y/%m/%d")
         
-        # 觸發條件：抵達 23:00 且當天尚未寄出
-        if now.hour == 23 and now.minute == 0 and last_exported_date != today_str:
+        # 觸發條件：抵達 20:00 且當天尚未寄出
+        if now.hour == 20 and now.minute == 0 and last_exported_date != today_str:
             try:
                 auto_send_daily_email()
                 last_exported_date = today_str
@@ -442,12 +443,13 @@ def background_scheduler():
         time.sleep(30)
 
 @st.cache_resource
-def start_email_scheduler():
-    thread = threading.Thread(target=background_scheduler, daemon=True)
+def start_email_scheduler(version_tag):
+    thread = threading.Thread(target=background_scheduler, args=(version_tag,), daemon=True)
     thread.start()
     return True
 
-start_email_scheduler()
+# 透過版本標記強制刷新背景排程
+start_email_scheduler(APP_VERSION)
 
 # ==================== 側邊欄：日期選擇、語系與匯出 ====================
 now_tw = get_current_tw_datetime()
@@ -513,7 +515,7 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # 🌟 立即手動寄送 Email 按鈕
+    # 立即手動寄送 Email 按鈕
     if st.button(t("btn_send_email"), use_container_width=True, type="primary"):
         try:
             with st.spinner("正在發送郵件..."):
