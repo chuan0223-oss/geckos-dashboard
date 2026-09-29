@@ -1,10 +1,10 @@
 """
 專案名稱: 通用專案管理系統 (General Project Management System)
-檔案名稱: pms_v4_14.py
-版本號碼: v4.14
+檔案名稱: pms_v4_15.py
+版本號碼: v4.15
 版更紀錄: 
-  - v4.13: 新增人員下拉、多維度搜尋、KPI
-  - v4.14: 深度搜尋升級！將「子任務」全面納入搜尋引擎。搜尋並點選子任務時，系統會智慧跳轉至隸屬的「主任務詳情頁面」，徹底解決指派給子任務的人員搜不到的問題。
+  - v4.14: 深度索引 (Deep Indexing) 與智慧路由
+  - v4.15: 高效管理版！清單加入「隸屬區段」下拉選單實現跨區段無縫搬移 (包含子任務聯動)，並於最右側加入「🗑️ 刪除」核取方塊，大幅減少進入詳情頁的頻率。詳情頁同步支援區段搬移。
 """
 
 import streamlit as st
@@ -13,7 +13,7 @@ import sqlite3
 import os
 from datetime import datetime, date
 
-st.set_page_config(page_title="專案管理系統 (v4.14)", page_icon="📋", layout="wide")
+st.set_page_config(page_title="專案管理系統 (v4.15)", page_icon="📋", layout="wide")
 DB_FILE = 'pm_system_v4.db'
 
 st.markdown("""
@@ -96,13 +96,12 @@ if not current_project:
 
 
 # ==========================================
-# 3. 讀取與處理子任務階層資料 (深度索引)
+# 3. 讀取與處理子任務階層資料
 # ==========================================
 df_all_tasks = pd.read_sql_query(f"SELECT * FROM tasks WHERE project_name = '{current_project}'", conn)
 df_all_tasks['is_done'] = df_all_tasks['is_done'].fillna(0).astype(int)
 
 if not df_all_tasks.empty:
-    # 計算子任務數量
     df_children_temp = df_all_tasks[df_all_tasks['parent_id'].notna()]
     sub_counts = df_children_temp.groupby('parent_id').size()
     df_all_tasks['sub_count'] = df_all_tasks['id'].map(sub_counts)
@@ -122,7 +121,6 @@ if not df_all_tasks.empty:
             return f"[{dept} | {assign}]  ↳ {row['task_name']} (隸屬子任務)"
 
     df_all_tasks['display_name'] = df_all_tasks.apply(make_display_name, axis=1)
-    # 🟢 現在 search_name 會套用到包含子任務的所有資料上
     df_all_tasks['search_name'] = df_all_tasks.apply(make_search_name, axis=1) 
     
     df_parents = df_all_tasks[df_all_tasks['parent_id'].isna()].copy()
@@ -159,12 +157,10 @@ with tab_list:
         kpi3.metric("✅ 專案整體完成度", f"{progress_pct} %")
         st.divider()
         
-        # 🟢 任務工作站 (深度索引搜尋)
         if not df_all_tasks.empty:
             st.markdown("### 🔍 任務工作站 (編輯詳情)")
-            st.caption("💡 提示：您可以輸入任務名稱、部門或人員名字進行篩選。現在包含「子任務」也搜得到！")
+            st.caption("💡 提示：您可以輸入任務名稱、部門或人員名字進行篩選。")
             
-            # 將所有任務(含子任務)放入下拉選單
             task_options = dict(zip(df_all_tasks['id'], df_all_tasks['search_name']))
             col_search, col_btn = st.columns([4, 1])
             selected_to_edit = col_search.selectbox(
@@ -175,7 +171,6 @@ with tab_list:
                 placeholder="🔍 搜尋部門、人員、主任務或子任務名稱..."
             )
             
-            # 🟢 智慧路由：如果是子任務，自動跳轉到它隸屬的主任務
             if selected_to_edit:
                 selected_row = df_all_tasks[df_all_tasks['id'] == selected_to_edit].iloc[0]
                 if pd.notna(selected_row['parent_id']):
@@ -189,13 +184,16 @@ with tab_list:
 
         sections = pd.read_sql_query(f"SELECT section_name FROM sections WHERE project_name='{current_project}'", conn)['section_name'].tolist()
         
+        # 🟢 UI 升級：新增「隸屬區段」與「刪除」欄位
         column_config = {
             "id": None, 
             "is_done": st.column_config.CheckboxColumn("✅", width="small"),
             "display_name": st.column_config.TextColumn("任務名稱", required=True, width="large"),
+            "section_name": st.column_config.SelectboxColumn("隸屬區段", options=sections, width="medium"),
             "department": st.column_config.SelectboxColumn("負責部門", options=dept_list, width="medium"),
             "assignee": st.column_config.SelectboxColumn("指派對象", options=assignee_list, width="medium"),
-            "due_date": st.column_config.DateColumn("截止日期", width="small")
+            "due_date": st.column_config.DateColumn("截止日期", width="small"),
+            "delete_flag": st.column_config.CheckboxColumn("🗑️ 刪除", width="small")
         }
 
         with st.expander("➕ 新增區段 (Add Section)"):
@@ -223,8 +221,9 @@ with tab_list:
             if not df_sec.empty:
                 df_sec['due_date'] = pd.to_datetime(df_sec['due_date'], errors='coerce').dt.date
                 df_sec['is_done'] = df_sec['is_done'].fillna(False).astype(bool) 
+                df_sec['delete_flag'] = False # 初始化刪除按鈕為 False
             
-            cols_order = ['id', 'is_done', 'display_name', 'department', 'assignee', 'due_date']
+            cols_order = ['id', 'is_done', 'display_name', 'section_name', 'department', 'assignee', 'due_date', 'delete_flag']
             df_sec_display = df_sec[cols_order].reset_index(drop=True) if not df_sec.empty else pd.DataFrame(columns=cols_order)
             
             editor_key = f"autosave_{sec}_{st.session_state.table_counter}"
@@ -247,19 +246,32 @@ with tab_list:
                             r_id = int(df_sec_display.iloc[int(r_idx)]['id'])
                             u_row = edited_df.iloc[int(r_idx)]
                             
+                            # 🟢 邏輯 1：偵測快速刪除
+                            if u_row.get('delete_flag') == True:
+                                c.execute("DELETE FROM tasks WHERE id = ? OR parent_id = ?", (r_id, r_id))
+                                continue # 刪除後不執行下方更新
+                            
+                            # 邏輯 2：處理更新與搬移
                             raw_display = str(u_row['display_name'])
                             t_name = raw_display.split(" 📦")[0].strip() 
                             if not t_name: 
                                 t_name = str(df_sec_display.iloc[int(r_idx)]['display_name']).split(" 📦")[0].strip() 
                                 
                             d_done = 1 if u_row['is_done'] else 0
+                            new_sec = str(u_row['section_name']).strip() if pd.notna(u_row['section_name']) else sec
                             d_dept = str(u_row['department']).strip() if pd.notna(u_row['department']) else ""
                             d_assig = str(u_row['assignee']).strip() if pd.notna(u_row['assignee']) else ""
                             d_due = u_row['due_date']
                             d_due_str = str(d_due)[:10] if pd.notna(d_due) and str(d_due).strip() not in ["", "NaT", "None"] else None
                             
-                            c.execute("""UPDATE tasks SET is_done=?, task_name=?, department=?, assignee=?, due_date=? WHERE id=?""", 
-                                      (d_done, t_name, d_dept, d_assig, d_due_str, r_id))
+                            # 更新主任務
+                            c.execute("""UPDATE tasks SET is_done=?, task_name=?, section_name=?, department=?, assignee=?, due_date=? WHERE id=?""", 
+                                      (d_done, t_name, new_sec, d_dept, d_assig, d_due_str, r_id))
+                            
+                            # 🟢 如果區段被搬移，底下的子任務也要一起聯動更改區段
+                            if new_sec != sec:
+                                c.execute("UPDATE tasks SET section_name=? WHERE parent_id=?", (new_sec, r_id))
+                                
                         conn.commit()
                         st.session_state.table_counter += 1
                         st.rerun()
@@ -300,8 +312,8 @@ with tab_list:
                 st.rerun()
         else:
             task = task_df.iloc[0]
+            sections = pd.read_sql_query(f"SELECT section_name FROM sections WHERE project_name='{current_project}'", conn)['section_name'].tolist()
             
-            st.caption(f"📂 專案：{task['project_name']} ｜ 🔽 區段：{task['section_name']}")
             st.markdown(f"<div class='task-page-title'>📝 任務編輯工作站</div>", unsafe_allow_html=True)
             st.divider()
 
@@ -312,25 +324,30 @@ with tab_list:
                     st.markdown("#### 基本設定")
                     with st.form("full_edit_form"):
                         edit_name = st.text_input("任務名稱", value=task['task_name'])
-                        edit_desc = st.text_area("任務描述", value=task['description'] if task['description'] else "", height=150)
+                        
+                        # 🟢 詳情頁同步支援「隸屬區段」搬移
+                        c_sec, c_date = st.columns(2)
+                        s_idx = sections.index(task['section_name']) if task['section_name'] in sections else 0
+                        edit_section = c_sec.selectbox("隸屬區段", options=sections, index=s_idx)
+                        edit_date = c_date.date_input("截止日期", value=pd.to_datetime(task['due_date']) if task['due_date'] else None)
                         
                         c1, c2 = st.columns(2)
                         d_idx = dept_list.index(task['department']) if task['department'] in dept_list else None
                         edit_dept = c1.selectbox("負責部門", options=dept_list, index=d_idx, placeholder="選擇部門...")
-                        
-                        edit_date = c2.date_input("截止日期", value=pd.to_datetime(task['due_date']) if task['due_date'] else None)
-                        
-                        c3, c4 = st.columns(2)
                         a_idx = assignee_list.index(task['assignee']) if task['assignee'] in assignee_list else None
-                        edit_assignee = c3.selectbox("指派對象", options=assignee_list, index=a_idx, placeholder="選擇人員...")
+                        edit_assignee = c2.selectbox("指派對象", options=assignee_list, index=a_idx, placeholder="選擇人員...")
                         
-                        edit_collab = c4.text_input("🤝 協作對象 (非指派者)", value=task['collaborator'] if task['collaborator'] else "")
+                        edit_collab = st.text_input("🤝 協作對象 (非指派者)", value=task['collaborator'] if task['collaborator'] else "")
+                        edit_desc = st.text_area("任務描述", value=task['description'] if task['description'] else "", height=150)
                         
                         st.markdown(" ")
                         if st.form_submit_button("💾 儲存任務變更", type="primary", use_container_width=True):
                             c = conn.cursor()
-                            c.execute("""UPDATE tasks SET task_name=?, department=?, assignee=?, collaborator=?, due_date=?, description=? WHERE id=?""", 
-                                      (edit_name, edit_dept if edit_dept else '', edit_assignee if edit_assignee else '', edit_collab, edit_date, edit_desc, int(active_id)))
+                            c.execute("""UPDATE tasks SET task_name=?, section_name=?, department=?, assignee=?, collaborator=?, due_date=?, description=? WHERE id=?""", 
+                                      (edit_name, edit_section, edit_dept if edit_dept else '', edit_assignee if edit_assignee else '', edit_collab, edit_date, edit_desc, int(active_id)))
+                            # 若有搬移區段，同步更新底下所有子任務
+                            if edit_section != task['section_name']:
+                                c.execute("UPDATE tasks SET section_name=? WHERE parent_id=?", (edit_section, int(active_id)))
                             conn.commit()
                             st.success("變更已儲存！")
                             st.rerun()
