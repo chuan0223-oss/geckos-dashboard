@@ -1,10 +1,10 @@
 """
 專案名稱: 通用專案管理系統 (General Project Management System)
-檔案名稱: pms_v4_13.py
-版本號碼: v4.13
+檔案名稱: pms_v4_14.py
+版本號碼: v4.14
 版更紀錄: 
-  - v4.12: 單頁切換 (Drill-down) 與 fixed 表格
-  - v4.13: 新增動態人員指派管理、多維度超級搜尋 (部門/人員)、頂部 KPI 儀表板與區段獨立進度條。
+  - v4.13: 新增人員下拉、多維度搜尋、KPI
+  - v4.14: 深度搜尋升級！將「子任務」全面納入搜尋引擎。搜尋並點選子任務時，系統會智慧跳轉至隸屬的「主任務詳情頁面」，徹底解決指派給子任務的人員搜不到的問題。
 """
 
 import streamlit as st
@@ -13,7 +13,7 @@ import sqlite3
 import os
 from datetime import datetime, date
 
-st.set_page_config(page_title="專案管理系統 (v4.13)", page_icon="📋", layout="wide")
+st.set_page_config(page_title="專案管理系統 (v4.14)", page_icon="📋", layout="wide")
 DB_FILE = 'pm_system_v4.db'
 
 st.markdown("""
@@ -27,7 +27,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 狀態記憶初始化
 if 'view_mode' not in st.session_state:
     st.session_state.view_mode = 'list'
 if 'active_task_id' not in st.session_state:
@@ -36,14 +35,14 @@ if 'table_counter' not in st.session_state:
     st.session_state.table_counter = 0
 
 # ==========================================
-# 1. 資料庫初始化 (新增 assignees 表)
+# 1. 資料庫初始化
 # ==========================================
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS projects (project_name TEXT PRIMARY KEY, target_date DATE)')
     c.execute('CREATE TABLE IF NOT EXISTS departments (dept_name TEXT PRIMARY KEY)')
-    c.execute('CREATE TABLE IF NOT EXISTS assignees (name TEXT PRIMARY KEY)') # 新增人員表
+    c.execute('CREATE TABLE IF NOT EXISTS assignees (name TEXT PRIMARY KEY)') 
     c.execute('CREATE TABLE IF NOT EXISTS sections (id INTEGER PRIMARY KEY AUTOINCREMENT, project_name TEXT, section_name TEXT)')
     
     c.execute('''
@@ -65,7 +64,7 @@ def init_db():
     if c.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0:
         c.execute("INSERT INTO projects (project_name, target_date) VALUES (?, ?)", ('ERP 導入專案', '2026-12-31'))
         c.executemany("INSERT INTO departments (dept_name) VALUES (?)", [('IT部',), ('財務部',), ('採購部',), ('總務部',), ('高階主管',)])
-        c.executemany("INSERT INTO assignees (name) VALUES (?)", [('王大明',), ('陳小美',), ('李秘書',)])
+        c.executemany("INSERT INTO assignees (name) VALUES (?)", [('王大明',), ('陳小美',), ('李秘書',), ('Mia',)])
         c.executemany("INSERT INTO sections (project_name, section_name) VALUES (?, ?)", [('ERP 導入專案', '導入前置作業'), ('ERP 導入專案', '系統建置與清洗')])
         conn.commit()
     conn.close()
@@ -97,49 +96,54 @@ if not current_project:
 
 
 # ==========================================
-# 3. 讀取與處理子任務階層資料
+# 3. 讀取與處理子任務階層資料 (深度索引)
 # ==========================================
 df_all_tasks = pd.read_sql_query(f"SELECT * FROM tasks WHERE project_name = '{current_project}'", conn)
 df_all_tasks['is_done'] = df_all_tasks['is_done'].fillna(0).astype(int)
 
 if not df_all_tasks.empty:
-    df_parents = df_all_tasks[df_all_tasks['parent_id'].isna()].copy()
-    df_children = df_all_tasks[df_all_tasks['parent_id'].notna()].copy()
-    
-    sub_counts = df_children.groupby('parent_id').size().reset_index(name='sub_count')
-    df_parents = pd.merge(df_parents, sub_counts, how='left', left_on='id', right_on='parent_id')
+    # 計算子任務數量
+    df_children_temp = df_all_tasks[df_all_tasks['parent_id'].notna()]
+    sub_counts = df_children_temp.groupby('parent_id').size()
+    df_all_tasks['sub_count'] = df_all_tasks['id'].map(sub_counts)
     
     def make_display_name(row):
         name = row['task_name']
-        if pd.notna(row['sub_count']) and row['sub_count'] > 0:
+        if pd.isna(row['parent_id']) and pd.notna(row['sub_count']) and row['sub_count'] > 0:
             return f"{name} 📦 ({int(row['sub_count'])} 子任務)"
         return name
         
     def make_search_name(row):
-        dept = row['department'] if row['department'] else "未定部門"
+        dept = row['department'] if row['department'] else "未定"
         assign = row['assignee'] if row['assignee'] else "未指派"
-        return f"[{dept} | {assign}] {row['display_name']}"
+        if pd.isna(row['parent_id']):
+            return f"[{dept} | {assign}] {row['display_name']}"
+        else:
+            return f"[{dept} | {assign}]  ↳ {row['task_name']} (隸屬子任務)"
 
-    df_parents['display_name'] = df_parents.apply(make_display_name, axis=1)
-    df_parents['search_name'] = df_parents.apply(make_search_name, axis=1) # 用於多維度搜尋
+    df_all_tasks['display_name'] = df_all_tasks.apply(make_display_name, axis=1)
+    # 🟢 現在 search_name 會套用到包含子任務的所有資料上
+    df_all_tasks['search_name'] = df_all_tasks.apply(make_search_name, axis=1) 
+    
+    df_parents = df_all_tasks[df_all_tasks['parent_id'].isna()].copy()
+    df_children = df_all_tasks[df_all_tasks['parent_id'].notna()].copy()
 else:
     df_parents = pd.DataFrame(columns=['id', 'section_name', 'is_done', 'task_name', 'display_name', 'search_name', 'department', 'assignee', 'collaborator', 'due_date'])
     df_children = pd.DataFrame()
 
 
 # ==========================================
-# 4. 畫面路由 (Routing): 依據模式切換畫面
+# 4. 畫面路由 (Routing)
 # ==========================================
 tab_list, tab_settings = st.tabs(["📋 專案工作區", "⚙️ 專案維護與設定"])
 
 with tab_list:
     
     # ---------------------------------------------------------
-    # 模式 A: 任務清單模式 (全螢幕寬度)
+    # 模式 A: 任務清單模式
     # ---------------------------------------------------------
     if st.session_state.view_mode == 'list':
         
-        # 🟢 KPI 儀表板 (進度與倒數)
         st.title(f"📋 {current_project}")
         
         target_date_str = pd.read_sql_query(f"SELECT target_date FROM projects WHERE project_name='{current_project}'", conn).iloc[0, 0]
@@ -155,21 +159,29 @@ with tab_list:
         kpi3.metric("✅ 專案整體完成度", f"{progress_pct} %")
         st.divider()
         
-        # 🟢 任務工作站 (多維度超級搜尋)
-        if not df_parents.empty:
+        # 🟢 任務工作站 (深度索引搜尋)
+        if not df_all_tasks.empty:
             st.markdown("### 🔍 任務工作站 (編輯詳情)")
-            st.caption("💡 提示：您可以輸入任務名稱、部門 (如 IT部) 或人員名字進行快速篩選。")
-            task_options = dict(zip(df_parents['id'], df_parents['search_name']))
+            st.caption("💡 提示：您可以輸入任務名稱、部門或人員名字進行篩選。現在包含「子任務」也搜得到！")
+            
+            # 將所有任務(含子任務)放入下拉選單
+            task_options = dict(zip(df_all_tasks['id'], df_all_tasks['search_name']))
             col_search, col_btn = st.columns([4, 1])
             selected_to_edit = col_search.selectbox(
                 "選擇任務進入全螢幕編輯頁面", 
                 options=list(task_options.keys()), 
                 format_func=lambda x: task_options[x],
                 index=None,
-                placeholder="🔍 搜尋部門、人員或任務名稱..."
+                placeholder="🔍 搜尋部門、人員、主任務或子任務名稱..."
             )
+            
+            # 🟢 智慧路由：如果是子任務，自動跳轉到它隸屬的主任務
             if selected_to_edit:
-                st.session_state.active_task_id = selected_to_edit
+                selected_row = df_all_tasks[df_all_tasks['id'] == selected_to_edit].iloc[0]
+                if pd.notna(selected_row['parent_id']):
+                    st.session_state.active_task_id = int(selected_row['parent_id'])
+                else:
+                    st.session_state.active_task_id = int(selected_to_edit)
                 st.session_state.view_mode = 'detail'
                 st.rerun()
         
@@ -182,7 +194,7 @@ with tab_list:
             "is_done": st.column_config.CheckboxColumn("✅", width="small"),
             "display_name": st.column_config.TextColumn("任務名稱", required=True, width="large"),
             "department": st.column_config.SelectboxColumn("負責部門", options=dept_list, width="medium"),
-            "assignee": st.column_config.SelectboxColumn("指派對象", options=assignee_list, width="medium"), # 改為下拉
+            "assignee": st.column_config.SelectboxColumn("指派對象", options=assignee_list, width="medium"),
             "due_date": st.column_config.DateColumn("截止日期", width="small")
         }
 
@@ -195,7 +207,6 @@ with tab_list:
                 st.rerun()
         
         for sec in sections:
-            # 🟢 區段獨立進度計算
             sec_tasks = df_all_tasks[df_all_tasks['section_name'] == sec]
             sec_total = len(sec_tasks)
             sec_done = sec_tasks['is_done'].sum()
@@ -268,7 +279,7 @@ with tab_list:
                         st.rerun()
 
     # ---------------------------------------------------------
-    # 模式 B: 任務詳情模式 (沉浸式全螢幕編輯)
+    # 模式 B: 任務詳情模式 
     # ---------------------------------------------------------
     elif st.session_state.view_mode == 'detail':
         
@@ -402,7 +413,6 @@ with tab_settings:
                 
         st.markdown("---")
         
-        # 🟢 新增：人員指派名單管理
         st.subheader("🧑‍🤝‍🧑 指派人員名單管理")
         df_assignee = pd.read_sql_query("SELECT * FROM assignees", conn)
         with st.form("assignee_form"):
