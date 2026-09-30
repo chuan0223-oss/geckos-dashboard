@@ -1,10 +1,10 @@
 """
 專案名稱: 通用專案管理系統 (General Project Management System)
-檔案名稱: pms_v5_2.py
-版本號碼: v5.2 (雲端原生 + 智慧資料清洗遷移版)
+檔案名稱: pms_v5_3.py
+版本號碼: v5.3 (獨特金鑰防護版)
 版更紀錄: 
-  - v5.1: 內建一鍵遷移工具
-  - v5.2: 完美解決 Pandas 讀取 SQLite 時 NaN 型態衝突問題，自動清洗空日期與空整數，並加入資料庫交易復原 (Rollback) 機制。
+  - v5.2: 智慧資料清洗與遷移
+  - v5.3: 引入 enumerate 索引迴圈，彻底杜絕重複區段名稱導致的 StreamlitDuplicateElementKey 金鑰衝突錯誤。
 """
 
 import streamlit as st
@@ -17,7 +17,7 @@ import warnings
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
-st.set_page_config(page_title="專案管理系統 (v5.2)", page_icon="☁️", layout="wide")
+st.set_page_config(page_title="專案管理系統 (v5.3)", page_icon="☁️", layout="wide")
 
 st.markdown("""
 <style>
@@ -95,7 +95,7 @@ try:
     dept_list = pd.read_sql_query("SELECT dept_name FROM departments", conn)['dept_name'].tolist()
     assignee_list = pd.read_sql_query("SELECT name FROM assignees", conn)['name'].tolist()
 except Exception:
-    conn.rollback() # 防止交易失敗卡住
+    conn.rollback() 
 
 with st.sidebar:
     st.header("👤 工作區導覽")
@@ -242,7 +242,8 @@ with tab_list:
                     c.close()
                     st.rerun()
             
-            for sec in sections:
+            # 🟢 修正：引入 enumerate (i, sec) 確保金鑰 100% 獨一無二，消除重複 Key 錯誤
+            for i, sec in enumerate(sections):
                 sec_tasks = df_all_tasks[df_all_tasks['section_name'] == sec] if not df_all_tasks.empty else pd.DataFrame()
                 sec_total = len(sec_tasks)
                 sec_done = sec_tasks['is_done'].sum() if not sec_tasks.empty else 0
@@ -263,7 +264,7 @@ with tab_list:
                 cols_order = ['id', 'is_done', 'display_name', 'section_name', 'department', 'assignee', 'due_date', 'delete_flag']
                 df_sec_display = df_sec[cols_order].reset_index(drop=True) if not df_sec.empty else pd.DataFrame(columns=cols_order)
                 
-                editor_key = f"autosave_{sec}_{st.session_state.table_counter}"
+                editor_key = f"autosave_{i}_{sec}_{st.session_state.table_counter}"
                 
                 if not df_sec_display.empty:
                     edited_df = st.data_editor(
@@ -312,7 +313,7 @@ with tab_list:
                 else:
                     st.caption("此區段目前無任務。")
 
-                with st.form(f"add_task_form_{sec}", clear_on_submit=True):
+                with st.form(f"add_task_form_{i}_{sec}", clear_on_submit=True):
                     col1, col2 = st.columns([5, 1])
                     new_t_name = col1.text_input(f"新增任務至 {sec}", label_visibility="collapsed", placeholder="➕ 輸入新任務名稱 (按 Enter 快速儲存)...")
                     if col2.form_submit_button("新增任務", use_container_width=True):
@@ -451,7 +452,7 @@ with tab_list:
                                 c.close()
                                 st.rerun()
 
-# ----------------- Tab 2: 專案維護與設定 (含一鍵資料遷移工具) -----------------
+# ----------------- Tab 2: 專案維護與設定 -----------------
 with tab_settings:
     col_set1, col_set2 = st.columns(2)
     
@@ -494,7 +495,6 @@ with tab_settings:
                 c.close()
                 st.rerun()
                 
-        # 🟢 內建一鍵遷移工具 (已完美加入 NaN 清洗防護)
         st.markdown("---")
         st.subheader("📦 本地舊資料無痛遷移工具")
         st.caption("如果您已將舊的 `pm_system_v4.db` 檔案上傳至 GitHub，點擊下方按鈕即可一鍵將所有歷史資料匯入至 Supabase 雲端！")
@@ -508,7 +508,6 @@ with tab_settings:
                     sqlite_conn = sqlite3.connect(old_db_path)
                     pg_c = conn.cursor()
                     
-                    # 1. 遷移 projects
                     df_p = pd.read_sql("SELECT * FROM projects", sqlite_conn)
                     for _, row in df_p.iterrows():
                         t_date = row['target_date']
@@ -516,12 +515,10 @@ with tab_settings:
                             t_date = None
                         pg_c.execute("INSERT INTO projects (project_name, target_date) VALUES (%s, %s) ON CONFLICT (project_name) DO NOTHING", (row['project_name'], t_date))
                     
-                    # 2. 遷移 departments
                     df_d = pd.read_sql("SELECT * FROM departments", sqlite_conn)
                     for _, row in df_d.iterrows():
                         pg_c.execute("INSERT INTO departments (dept_name) VALUES (%s) ON CONFLICT (dept_name) DO NOTHING", (row['dept_name'],))
                         
-                    # 3. 遷移 assignees
                     try:
                         df_a = pd.read_sql("SELECT * FROM assignees", sqlite_conn)
                         for _, row in df_a.iterrows():
@@ -529,29 +526,24 @@ with tab_settings:
                     except:
                         pass
                         
-                    # 4. 遷移 sections
                     df_s = pd.read_sql("SELECT * FROM sections", sqlite_conn)
                     for _, row in df_s.iterrows():
                         pg_c.execute("INSERT INTO sections (project_name, section_name) VALUES (%s, %s)", (row['project_name'], row['section_name']))
                         
-                    # 5. 遷移 tasks (精準資料清洗，防止 NaN 污染)
                     df_t = pd.read_sql("SELECT * FROM tasks", sqlite_conn)
                     for _, row in df_t.iterrows():
-                        # 清洗 due_date
                         due_val = row['due_date']
                         if pd.isna(due_val) or str(due_val).strip() in ['', 'nan', 'NaT', 'None']:
                             due_val = None
                         else:
                             due_val = str(due_val)[:10]
 
-                        # 清洗 parent_id
                         p_id = row['parent_id']
                         if pd.isna(p_id) or str(p_id).strip() in ['', 'nan', 'NaT', 'None']:
                             p_id = None
                         else:
                             p_id = int(p_id)
 
-                        # 清洗文字欄位
                         t_name = row['task_name'] if pd.notna(row['task_name']) else ''
                         dept = row['department'] if pd.notna(row['department']) else ''
                         assign = row['assignee'] if pd.notna(row['assignee']) else ''
