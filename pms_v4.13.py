@@ -1,10 +1,10 @@
 """
 專案名稱: 通用專案管理系統 (General Project Management System)
-檔案名稱: pms_v5_1.py
-版本號碼: v5.1 (雲端原生 + 一鍵遷移版)
+檔案名稱: pms_v5_2.py
+版本號碼: v5.2 (雲端原生 + 智慧資料清洗遷移版)
 版更紀錄: 
-  - v5.0: 導入 Supabase 雲端資料庫
-  - v5.1: 內建「SQLite -> Supabase 一鍵遷移工具」，自動偵測本機舊資料庫檔案，實現歷史資料無痛上雲，告別重新手動輸入的惡夢。
+  - v5.1: 內建一鍵遷移工具
+  - v5.2: 完美解決 Pandas 讀取 SQLite 時 NaN 型態衝突問題，自動清洗空日期與空整數，並加入資料庫交易復原 (Rollback) 機制。
 """
 
 import streamlit as st
@@ -17,7 +17,7 @@ import warnings
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
-st.set_page_config(page_title="專案管理系統 (v5.1)", page_icon="☁️", layout="wide")
+st.set_page_config(page_title="專案管理系統 (v5.2)", page_icon="☁️", layout="wide")
 
 st.markdown("""
 <style>
@@ -86,9 +86,16 @@ conn = get_db_connection()
 # ==========================================
 # 2. 側邊欄與全域讀取
 # ==========================================
-project_list = pd.read_sql_query("SELECT project_name FROM projects", conn)['project_name'].tolist()
-dept_list = pd.read_sql_query("SELECT dept_name FROM departments", conn)['dept_name'].tolist()
-assignee_list = pd.read_sql_query("SELECT name FROM assignees", conn)['name'].tolist()
+project_list = []
+dept_list = []
+assignee_list = []
+
+try:
+    project_list = pd.read_sql_query("SELECT project_name FROM projects", conn)['project_name'].tolist()
+    dept_list = pd.read_sql_query("SELECT dept_name FROM departments", conn)['dept_name'].tolist()
+    assignee_list = pd.read_sql_query("SELECT name FROM assignees", conn)['name'].tolist()
+except Exception:
+    conn.rollback() # 防止交易失敗卡住
 
 with st.sidebar:
     st.header("👤 工作區導覽")
@@ -103,16 +110,20 @@ with st.sidebar:
     st.markdown("---")
     st.caption("☁️ **系統狀態**\n\n🟢 Supabase 雲端資料庫連線正常")
 
-if not current_project:
-    st.warning("目前無任何專案，請至右側「專案維護與設定」建立新專案，或執行下方「歷史資料遷移」。")
+if not current_project and project_list:
+    current_project = project_list[0]
 
 
 # ==========================================
 # 3. 讀取與處理子任務階層資料
 # ==========================================
 if current_project:
-    df_all_tasks = pd.read_sql_query(f"SELECT * FROM tasks WHERE project_name = '{current_project}'", conn)
-    df_all_tasks['is_done'] = df_all_tasks['is_done'].fillna(False).astype(bool)
+    try:
+        df_all_tasks = pd.read_sql_query(f"SELECT * FROM tasks WHERE project_name = '{current_project}'", conn)
+        df_all_tasks['is_done'] = df_all_tasks['is_done'].fillna(False).astype(bool)
+    except Exception:
+        conn.rollback()
+        df_all_tasks = pd.DataFrame()
 
     if not df_all_tasks.empty:
         df_children_temp = df_all_tasks[df_all_tasks['parent_id'].notna()]
@@ -159,7 +170,12 @@ with tab_list:
         if st.session_state.view_mode == 'list':
             st.title(f"📋 {current_project}")
             
-            target_date_val = pd.read_sql_query(f"SELECT target_date FROM projects WHERE project_name='{current_project}'", conn).iloc[0, 0]
+            try:
+                target_date_val = pd.read_sql_query(f"SELECT target_date FROM projects WHERE project_name='{current_project}'", conn).iloc[0, 0]
+            except:
+                conn.rollback()
+                target_date_val = date.today()
+
             if isinstance(target_date_val, str):
                 target_date_val = datetime.strptime(target_date_val, '%Y-%m-%d').date()
             elif isinstance(target_date_val, pd.Timestamp):
@@ -168,7 +184,7 @@ with tab_list:
             days_left = (target_date_val - date.today()).days if target_date_val else 0
             
             total_tasks = len(df_all_tasks)
-            completed_tasks = df_all_tasks['is_done'].sum()
+            completed_tasks = df_all_tasks['is_done'].sum() if not df_all_tasks.empty else 0
             progress_pct = int((completed_tasks / total_tasks * 100)) if total_tasks > 0 else 0
             
             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -200,7 +216,11 @@ with tab_list:
             
             st.divider()
 
-            sections = pd.read_sql_query(f"SELECT section_name FROM sections WHERE project_name='{current_project}'", conn)['section_name'].tolist()
+            try:
+                sections = pd.read_sql_query(f"SELECT section_name FROM sections WHERE project_name='{current_project}'", conn)['section_name'].tolist()
+            except:
+                conn.rollback()
+                sections = []
             
             column_config = {
                 "id": None, 
@@ -219,12 +239,13 @@ with tab_list:
                     c = conn.cursor()
                     c.execute("INSERT INTO sections (project_name, section_name) VALUES (%s, %s)", (current_project, new_section))
                     conn.commit()
+                    c.close()
                     st.rerun()
             
             for sec in sections:
-                sec_tasks = df_all_tasks[df_all_tasks['section_name'] == sec]
+                sec_tasks = df_all_tasks[df_all_tasks['section_name'] == sec] if not df_all_tasks.empty else pd.DataFrame()
                 sec_total = len(sec_tasks)
-                sec_done = sec_tasks['is_done'].sum()
+                sec_done = sec_tasks['is_done'].sum() if not sec_tasks.empty else 0
                 sec_pct = int((sec_done / sec_total * 100)) if sec_total > 0 else 0
                 
                 st.markdown(f"""
@@ -234,7 +255,7 @@ with tab_list:
                     </div>
                 """, unsafe_allow_html=True)
                 
-                df_sec = df_parents[df_parents['section_name'] == sec].copy()
+                df_sec = df_parents[df_parents['section_name'] == sec].copy() if not df_parents.empty else pd.DataFrame()
                 if not df_sec.empty:
                     df_sec['due_date'] = pd.to_datetime(df_sec['due_date'], errors='coerce').dt.date
                     df_sec['delete_flag'] = False 
@@ -276,7 +297,7 @@ with tab_list:
                                 d_dept = str(u_row['department']).strip() if pd.notna(u_row['department']) else ""
                                 d_assig = str(u_row['assignee']).strip() if pd.notna(u_row['assignee']) else ""
                                 d_due = u_row['due_date']
-                                d_due_str = str(d_due)[:10] if pd.notna(d_due) and str(d_due).strip() not in ["", "NaT", "None"] else None
+                                d_due_str = str(d_due)[:10] if pd.notna(d_due) and str(d_due).strip() not in ["", "NaT", "None", "nan"] else None
                                 
                                 c.execute("""UPDATE tasks SET is_done=%s, task_name=%s, section_name=%s, department=%s, assignee=%s, due_date=%s WHERE id=%s""", 
                                           (d_done, t_name, new_sec, d_dept, d_assig, d_due_str, r_id))
@@ -285,6 +306,7 @@ with tab_list:
                                     c.execute("UPDATE tasks SET section_name=%s WHERE parent_id=%s", (new_sec, r_id))
                                     
                             conn.commit()
+                            c.close()
                             st.session_state.table_counter += 1
                             st.rerun()
                 else:
@@ -299,6 +321,7 @@ with tab_list:
                             c.execute("""INSERT INTO tasks (project_name, section_name, is_done, task_name, department, assignee, due_date) 
                                          VALUES (%s, %s, False, %s, '', '', NULL)""", (current_project, sec, new_t_name.strip()))
                             conn.commit()
+                            c.close()
                             st.session_state.table_counter += 1
                             st.rerun()
 
@@ -311,7 +334,11 @@ with tab_list:
             st.markdown("</div>", unsafe_allow_html=True)
 
             active_id = st.session_state.active_task_id
-            task_df = pd.read_sql_query(f"SELECT * FROM tasks WHERE id = '{active_id}'", conn)
+            try:
+                task_df = pd.read_sql_query(f"SELECT * FROM tasks WHERE id = '{active_id}'", conn)
+            except:
+                conn.rollback()
+                task_df = pd.DataFrame()
             
             if task_df.empty:
                 st.error("找不到此任務，可能已被刪除。")
@@ -320,7 +347,11 @@ with tab_list:
                     st.rerun()
             else:
                 task = task_df.iloc[0]
-                sections = pd.read_sql_query(f"SELECT section_name FROM sections WHERE project_name='{current_project}'", conn)['section_name'].tolist()
+                try:
+                    sections = pd.read_sql_query(f"SELECT section_name FROM sections WHERE project_name='{current_project}'", conn)['section_name'].tolist()
+                except:
+                    conn.rollback()
+                    sections = []
                 
                 st.markdown(f"<div class='task-page-title'>📝 任務編輯工作站</div>", unsafe_allow_html=True)
                 st.divider()
@@ -336,7 +367,7 @@ with tab_list:
                             c_sec, c_date = st.columns(2)
                             s_idx = sections.index(task['section_name']) if task['section_name'] in sections else 0
                             edit_section = c_sec.selectbox("隸屬區段", options=sections, index=s_idx)
-                            edit_date = c_date.date_input("截止日期", value=pd.to_datetime(task['due_date']) if task['due_date'] else None)
+                            edit_date = c_date.date_input("截止日期", value=pd.to_datetime(task['due_date']) if pd.notna(task['due_date']) else None)
                             
                             c1, c2 = st.columns(2)
                             d_idx = dept_list.index(task['department']) if task['department'] in dept_list else None
@@ -344,8 +375,8 @@ with tab_list:
                             a_idx = assignee_list.index(task['assignee']) if task['assignee'] in assignee_list else None
                             edit_assignee = c2.selectbox("指派對象", options=assignee_list, index=a_idx, placeholder="選擇人員...")
                             
-                            edit_collab = st.text_input("🤝 協作對象 (非指派者)", value=task['collaborator'] if task['collaborator'] else "")
-                            edit_desc = st.text_area("任務描述", value=task['description'] if task['description'] else "", height=150)
+                            edit_collab = st.text_input("🤝 協作對象 (非指派者)", value=task['collaborator'] if pd.notna(task['collaborator']) else "")
+                            edit_desc = st.text_area("任務描述", value=task['description'] if pd.notna(task['description']) else "", height=150)
                             
                             st.markdown(" ")
                             if st.form_submit_button("💾 儲存任務變更", type="primary", use_container_width=True):
@@ -355,6 +386,7 @@ with tab_list:
                                 if edit_section != task['section_name']:
                                     c.execute("UPDATE tasks SET section_name=%s WHERE parent_id=%s", (edit_section, int(active_id)))
                                 conn.commit()
+                                c.close()
                                 st.success("變更已儲存！")
                                 st.rerun()
                                 
@@ -362,6 +394,7 @@ with tab_list:
                             c = conn.cursor()
                             c.execute("DELETE FROM tasks WHERE id = %s OR parent_id = %s", (int(active_id), int(active_id)))
                             conn.commit()
+                            c.close()
                             st.session_state.view_mode = 'list'
                             st.session_state.active_task_id = None
                             st.rerun()
@@ -369,7 +402,7 @@ with tab_list:
                 with col_sub_edit:
                     with st.container(border=True):
                         st.markdown("#### 📑 子任務清單")
-                        sub_df = df_children[df_children['parent_id'] == active_id].copy()
+                        sub_df = df_children[df_children['parent_id'] == active_id].copy() if not df_children.empty else pd.DataFrame()
                         
                         with st.form("subtask_manage_form"):
                             if not sub_df.empty:
@@ -415,6 +448,7 @@ with tab_list:
                                                          VALUES (%s, %s, %s, %s, %s, %s, %s)""", 
                                                       (task['project_name'], task['section_name'], bool(s_row.get('is_done',False)), s_row['task_name'], task['department'], s_row.get('assignee','') if pd.notna(s_row.get('assignee')) else '', int(active_id)))
                                 conn.commit()
+                                c.close()
                                 st.rerun()
 
 # ----------------- Tab 2: 專案維護與設定 (含一鍵資料遷移工具) -----------------
@@ -423,7 +457,12 @@ with tab_settings:
     
     with col_set1:
         st.subheader("🏢 動態部門管理")
-        df_dept = pd.read_sql_query("SELECT * FROM departments", conn)
+        try:
+            df_dept = pd.read_sql_query("SELECT * FROM departments", conn)
+        except:
+            conn.rollback()
+            df_dept = pd.DataFrame(columns=['dept_name'])
+
         with st.form("dept_form"):
             edited_dept = st.data_editor(df_dept, num_rows="dynamic", use_container_width=True, hide_index=True, column_config={"dept_name": st.column_config.TextColumn("部門名稱", required=True)})
             if st.form_submit_button("更新部門清單"):
@@ -432,12 +471,18 @@ with tab_settings:
                 for _, r in edited_dept.dropna(subset=['dept_name']).iterrows():
                     c.execute("INSERT INTO departments (dept_name) VALUES (%s)", (r['dept_name'],))
                 conn.commit()
+                c.close()
                 st.rerun()
                 
         st.markdown("---")
         
         st.subheader("🧑‍🤝‍🧑 指派人員名單管理")
-        df_assignee = pd.read_sql_query("SELECT * FROM assignees", conn)
+        try:
+            df_assignee = pd.read_sql_query("SELECT * FROM assignees", conn)
+        except:
+            conn.rollback()
+            df_assignee = pd.DataFrame(columns=['name'])
+
         with st.form("assignee_form"):
             edited_assignee = st.data_editor(df_assignee, num_rows="dynamic", use_container_width=True, hide_index=True, column_config={"name": st.column_config.TextColumn("人員姓名", required=True)})
             if st.form_submit_button("更新人員名單"):
@@ -446,9 +491,10 @@ with tab_settings:
                 for _, r in edited_assignee.dropna(subset=['name']).iterrows():
                     c.execute("INSERT INTO assignees (name) VALUES (%s)", (r['name'],))
                 conn.commit()
+                c.close()
                 st.rerun()
                 
-        # 🟢 內建一鍵遷移工具
+        # 🟢 內建一鍵遷移工具 (已完美加入 NaN 清洗防護)
         st.markdown("---")
         st.subheader("📦 本地舊資料無痛遷移工具")
         st.caption("如果您已將舊的 `pm_system_v4.db` 檔案上傳至 GitHub，點擊下方按鈕即可一鍵將所有歷史資料匯入至 Supabase 雲端！")
@@ -465,7 +511,10 @@ with tab_settings:
                     # 1. 遷移 projects
                     df_p = pd.read_sql("SELECT * FROM projects", sqlite_conn)
                     for _, row in df_p.iterrows():
-                        pg_c.execute("INSERT INTO projects (project_name, target_date) VALUES (%s, %s) ON CONFLICT (project_name) DO NOTHING", (row['project_name'], row['target_date']))
+                        t_date = row['target_date']
+                        if pd.isna(t_date) or str(t_date).strip() in ['', 'nan', 'NaT', 'None']:
+                            t_date = None
+                        pg_c.execute("INSERT INTO projects (project_name, target_date) VALUES (%s, %s) ON CONFLICT (project_name) DO NOTHING", (row['project_name'], t_date))
                     
                     # 2. 遷移 departments
                     df_d = pd.read_sql("SELECT * FROM departments", sqlite_conn)
@@ -485,24 +534,53 @@ with tab_settings:
                     for _, row in df_s.iterrows():
                         pg_c.execute("INSERT INTO sections (project_name, section_name) VALUES (%s, %s)", (row['project_name'], row['section_name']))
                         
-                    # 5. 遷移 tasks
+                    # 5. 遷移 tasks (精準資料清洗，防止 NaN 污染)
                     df_t = pd.read_sql("SELECT * FROM tasks", sqlite_conn)
                     for _, row in df_t.iterrows():
+                        # 清洗 due_date
+                        due_val = row['due_date']
+                        if pd.isna(due_val) or str(due_val).strip() in ['', 'nan', 'NaT', 'None']:
+                            due_val = None
+                        else:
+                            due_val = str(due_val)[:10]
+
+                        # 清洗 parent_id
+                        p_id = row['parent_id']
+                        if pd.isna(p_id) or str(p_id).strip() in ['', 'nan', 'NaT', 'None']:
+                            p_id = None
+                        else:
+                            p_id = int(p_id)
+
+                        # 清洗文字欄位
+                        t_name = row['task_name'] if pd.notna(row['task_name']) else ''
+                        dept = row['department'] if pd.notna(row['department']) else ''
+                        assign = row['assignee'] if pd.notna(row['assignee']) else ''
+                        collab = row['collaborator'] if pd.notna(row['collaborator']) else ''
+                        desc = row['description'] if pd.notna(row['description']) else ''
+                        is_d = bool(row['is_done']) if pd.notna(row['is_done']) else False
+
                         pg_c.execute("""INSERT INTO tasks (project_name, section_name, is_done, task_name, department, assignee, collaborator, due_date, description, parent_id) 
                                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
-                                     (row['project_name'], row['section_name'], bool(row['is_done']), row['task_name'], row['department'], row['assignee'], row['collaborator'], row['due_date'], row['description'], row['parent_id'] if pd.notna(row['parent_id']) else None))
+                                     (row['project_name'], row['section_name'], is_d, t_name, dept, assign, collab, due_val, desc, p_id))
                     
                     conn.commit()
+                    pg_c.close()
                     sqlite_conn.close()
                     st.success("🎉 歷史資料成功全數遷移至 Supabase 雲端！請重新整理網頁。")
                     st.rerun()
                 except Exception as ex:
+                    conn.rollback()
                     st.error(f"❌ 遷移過程發生錯誤：{ex}")
 
     with col_set2:
         if current_project:
             st.subheader("📑 當前專案區段管理")
-            df_sections = pd.read_sql_query(f"SELECT id, section_name FROM sections WHERE project_name='{current_project}'", conn)
+            try:
+                df_sections = pd.read_sql_query(f"SELECT id, section_name FROM sections WHERE project_name='{current_project}'", conn)
+            except:
+                conn.rollback()
+                df_sections = pd.DataFrame(columns=['id', 'section_name'])
+
             with st.form("section_form"):
                 edited_sections = st.data_editor(df_sections, num_rows="dynamic", use_container_width=True, hide_index=True, column_config={"id": None, "section_name": st.column_config.TextColumn("區段名稱", required=True)})
                 if st.form_submit_button("更新區段名稱"):
@@ -511,12 +589,18 @@ with tab_settings:
                     for _, r in edited_sections.dropna(subset=['section_name']).iterrows():
                         c.execute("INSERT INTO sections (project_name, section_name) VALUES (%s, %s)", (current_project, r['section_name']))
                     conn.commit()
+                    c.close()
                     st.rerun()
                     
             st.markdown("---")
                     
             st.subheader("🛠️ 當前專案維護")
-            current_target = pd.read_sql_query(f"SELECT target_date FROM projects WHERE project_name='{current_project}'", conn).iloc[0, 0]
+            try:
+                current_target = pd.read_sql_query(f"SELECT target_date FROM projects WHERE project_name='{current_project}'", conn).iloc[0, 0]
+            except:
+                conn.rollback()
+                current_target = str(date.today())
+
             with st.form("project_edit_form"):
                 update_proj_name = st.text_input("專案名稱", value=current_project)
                 if isinstance(current_target, str):
@@ -538,6 +622,7 @@ with tab_settings:
                     else:
                         c.execute("UPDATE projects SET target_date=%s WHERE project_name=%s", (update_proj_date, current_project))
                     conn.commit()
+                    c.close()
                     st.rerun()
                     
                 if col_u2.form_submit_button("🗑️ 刪除專案"):
@@ -546,6 +631,7 @@ with tab_settings:
                     c.execute("DELETE FROM sections WHERE project_name=%s", (current_project,))
                     c.execute("DELETE FROM tasks WHERE project_name=%s", (current_project,))
                     conn.commit()
+                    c.close()
                     st.rerun()
 
         st.markdown("---")
@@ -559,6 +645,7 @@ with tab_settings:
                     c = conn.cursor()
                     c.execute("INSERT INTO projects (project_name, target_date) VALUES (%s, %s)", (new_proj_name, new_proj_date))
                     conn.commit()
+                    c.close()
                     st.rerun()
 
 conn.close()
