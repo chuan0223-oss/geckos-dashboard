@@ -1,10 +1,10 @@
 """
 專案名稱: 通用專案管理系統 (General Project Management System)
-檔案名稱: pms_v5_4.py
-版本號碼: v5.4 (極速優化版 High-Performance Edition)
+檔案名稱: pms_v5_5.py
+版本號碼: v5.5 (連線穩定防護版 Connection-Safe Edition)
 版更紀錄: 
-  - v5.3: 獨特金鑰防護
-  - v5.4: 【效能重大突破】導入 @st.cache_resource 快取遠端連線、優化 SQL 批次交易與單一提交機制，徹底解決遠端雲端寫入延遲與卡頓感。
+  - v5.4: 導入連線快取加速
+  - v5.5: 修復快取連線被誤關閉導致的 InterfaceError 崩潰，導入自動偵測重連機制，確保雲端連線 100% 穩定。
 """
 
 import streamlit as st
@@ -17,7 +17,7 @@ import warnings
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
-st.set_page_config(page_title="專案管理系統 (v5.4)", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="專案管理系統 (v5.5)", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -38,10 +38,10 @@ if 'table_counter' not in st.session_state:
     st.session_state.table_counter = 0
 
 # ==========================================
-# 0. 高效能資料庫連線快取 (Connection Caching)
+# 0. 高效能且具備自動重連機制的資料庫連線
 # ==========================================
 @st.cache_resource(ttl=3600)
-def get_db_connection():
+def get_cached_connection():
     if "SUPABASE_DB_URL" not in st.secrets:
         st.error("⚠️ 系統錯誤：找不到雲端資料庫連線字串！請至 Streamlit Cloud 的 Secrets 設定 `SUPABASE_DB_URL`。")
         st.stop()
@@ -50,6 +50,18 @@ def get_db_connection():
     except Exception as e:
         st.error(f"⚠️ 無法連線至 Supabase 資料庫，錯誤訊息：{e}")
         st.stop()
+
+def get_db_connection():
+    try:
+        conn = get_cached_connection()
+        # 檢查連線是否已關閉，若已關閉則清除快取並重新連線
+        if conn.closed != 0:
+            get_cached_connection.clear()
+            conn = get_cached_connection()
+        return conn
+    except Exception:
+        get_cached_connection.clear()
+        return get_cached_connection()
 
 # ==========================================
 # 1. 資料庫初始化
@@ -108,7 +120,7 @@ with st.sidebar:
         st.session_state.prev_project = current_project
 
     st.markdown("---")
-    st.caption("⚡ **系統效能狀態**\n\n🟢 Supabase 雲端連線 (已啟用快取加速)")
+    st.caption("⚡ **系統效能狀態**\n\n🟢 Supabase 雲端連線 (已啟用快取加速與自動重連)")
 
 if not current_project and project_list:
     current_project = project_list[0]
@@ -161,11 +173,11 @@ else:
 # ==========================================
 # 4. 畫面路由 (Routing)
 # ==========================================
-tab_list, tab_settings = st.tabs(["📋 專案工作區", "⚙️ 專案維護與設定"])
+tab_list, tab_settings = st.tabs(["📋 專案工作區", "⚙️️ 專案維護與設定"])
 
 with tab_list:
     if not current_project:
-        st.info("💡 目前尚無專案。如果您有舊版的 `pm_system_v4.db` 檔案已上傳至 GitHub，請至隔壁頁籤「⚙️️ 專案維護與設定」執行一鍵遷移！")
+        st.info("💡 目前尚無專案。如果您有舊版的 `pm_system_v4.db` 檔案已上傳至 GitHub，請至隔壁頁籤「⚙️ 專案維護與設定」執行一鍵遷移！")
     else:
         if st.session_state.view_mode == 'list':
             st.title(f"📋 {current_project}")
@@ -560,8 +572,8 @@ with tab_settings:
                             is_d = bool(row['is_done']) if pd.notna(row['is_done']) else False
 
                             pg_c.execute("""INSERT INTO tasks (project_name, section_name, is_done, task_name, department, assignee, collaborator, due_date, description, parent_id) 
-                                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
-                                         (row['project_name'], row['section_name'], is_d, t_name, dept, assign, collab, due_val, desc, p_id))
+                                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", 
+                                     (row['project_name'], row['section_name'], is_d, t_name, dept, assign, collab, due_val, desc, p_id))
                         
                         conn.commit()
                         pg_c.close()
@@ -650,5 +662,3 @@ with tab_settings:
                     conn.commit()
                     c.close()
                 st.rerun()
-
-conn.close()
