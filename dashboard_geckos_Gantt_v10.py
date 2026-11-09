@@ -108,7 +108,7 @@ if uploaded_file is not None:
             if '專案負責人' in df_raw.columns:
                 df_raw['專案負責人'] = df_raw['專案負責人'].astype(str).replace('nan', '')
 
-            # [V75.2] 無差別強制數值轉換防護 (移除所有的 dtype 判斷，強制拔除逗號轉數字)
+            # 強制數值轉換防護
             for col in df_raw.columns:
                 if '營收' in col: 
                     df_raw[col] = pd.to_numeric(df_raw[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -152,36 +152,11 @@ if uploaded_file is not None:
         st.error("❌ 找不到「預估營收(TWD)」相關欄位，請檢查 Excel 表頭。")
         st.stop()
 
-    # 尋找狀態欄位 (用於判斷已結案)
     status_col = None
     for c in ['結案狀態', '專案狀態', '狀態']:
         if c in df_full.columns:
             status_col = c
             break
-
-    # =========================================================================
-    # [全域樣式與變數]
-    # =========================================================================
-    type_style_map = {
-        'NPDR': {'bg': '#EBF5FB', 'border': '#2E86C1', 'text': '#2E86C1'},
-        'MDR':  {'bg': '#E8F8F5', 'border': '#17A589', 'text': '#17A589'},
-        'TDR':  {'bg': '#FEF9E7', 'border': '#F1C40F', 'text': '#D35400'},
-        'default': {'bg': '#F2F3F4', 'border': '#95A5A6', 'text': '#7F8C8D'}
-    }
-    
-    cols_priority_npdr = ['NPDR', 'NPDR時間', 'NPDR開案時間', '開案時間', '开案时间']
-    cols_priority_dv = ['設計驗證時間', 'DV', 'DV時間', '設計驗證']
-    cols_priority_ev = ['工程驗證時間', 'EV', 'EV時間', '工程驗證']
-    cols_priority_order = ['預計訂單起始點', 'Order', '預計訂單']
-    
-    def get_first_valid_date(row, cols_list):
-        for c in cols_list:
-            if c in row.index:
-                val = row[c]
-                dt = parse_quarter_date_end(val)
-                if pd.isnull(dt): dt = pd.to_datetime(val, errors='coerce')
-                if pd.notnull(dt): return dt
-        return pd.NaT
 
     # =========================================================================
     # [區塊 1] 篩選條件
@@ -265,7 +240,6 @@ if uploaded_file is not None:
     unique_pms = get_safe_options(df_chart_source, '專案負責人_display')
     unique_open_types = get_safe_options(df_chart_source, '開案類別')
 
-    # [V75.2] 第二層防護：即使在前端編輯表亂改，計算時也會強制清洗字串
     val_twd = pd.to_numeric(df_chart_source[col_twd].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     val_rmb = pd.to_numeric(df_chart_source[col_rmb].astype(str).str.replace(',', ''), errors='coerce').fillna(0) if col_rmb else 0
     df_chart_source['Calculated_Total_TWD'] = val_twd + (val_rmb * rmb_rate)
@@ -291,7 +265,7 @@ if uploaded_file is not None:
     now = pd.Timestamp.now().normalize()
 
     # =========================================================================
-    # [區塊 2] 活躍專案總數 (V75.0: 極簡聚焦版)
+    # [區塊 2] 活躍專案總數 (V75 極簡聚焦版)
     # =========================================================================
     st.divider()
     
@@ -358,10 +332,12 @@ if uploaded_file is not None:
             with b6_col_metric: st.metric(label=f"💰 預估總營收 (TWD)", value=f"{local_rev:,.0f}", help="顯示當前篩選條件下的預估總營收")
 
             if not df_b6.empty:
+                # [V75.3] 確保將最原始的毛利率帶入分組計算中
                 df_b6_grouped = df_b6.groupby('專案').agg({
                     'Calculated_Total_TWD': 'sum',
                     'Calculated_Gross_Profit': 'sum',
-                    'Calculated_Actual_Total_TWD': 'sum'
+                    'Calculated_Actual_Total_TWD': 'sum',
+                    'Parsed_Margin_Rate': 'max' # 取最高毛利率防呆
                 }).reset_index()
                 
                 if status_col:
@@ -419,9 +395,12 @@ if uploaded_file is not None:
             def get_smart_color_gp(val): return '#333333' if val < (max_gp * 0.4) else '#FFFFFF'
             df_gp_chart['Inside_Color'] = df_gp_chart['Calculated_Gross_Profit'].apply(get_smart_color_gp)
 
-            df_gp_chart['Avg_Margin'] = np.where(df_gp_chart['Calculated_Total_TWD'] > 0, 
-                                                 (df_gp_chart['Calculated_Gross_Profit'] / df_gp_chart['Calculated_Total_TWD']) * 100, 
-                                                 0)
+            # [V75.3] 智慧毛利率判定：如果有營收算平均，如果營收是0則直抓原始毛利率
+            df_gp_chart['Avg_Margin'] = np.where(
+                df_gp_chart['Calculated_Total_TWD'] > 0, 
+                (df_gp_chart['Calculated_Gross_Profit'] / df_gp_chart['Calculated_Total_TWD']) * 100, 
+                df_gp_chart['Parsed_Margin_Rate'] * 100
+            )
             
             def get_gp_bar_text(row):
                 val_str = f"{row['Calculated_Gross_Profit']:,.0f}"
