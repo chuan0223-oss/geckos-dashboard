@@ -92,6 +92,21 @@ def get_safe_options(df, col_name):
         return sorted(opts)
     return []
 
+# [V75.4 Fix] 補回被誤刪的 Roadmap 日期抓取參數與函式
+cols_priority_npdr = ['NPDR', 'NPDR時間', 'NPDR開案時間', '開案時間', '开案时间']
+cols_priority_dv = ['設計驗證時間', 'DV', 'DV時間', '設計驗證']
+cols_priority_ev = ['工程驗證時間', 'EV', 'EV時間', '工程驗證']
+cols_priority_order = ['預計訂單起始點', 'Order', '預計訂單']
+
+def get_first_valid_date(row, cols_list):
+    for c in cols_list:
+        if c in row.index:
+            val = row[c]
+            dt = parse_quarter_date_end(val)
+            if pd.isnull(dt): dt = pd.to_datetime(val, errors='coerce')
+            if pd.notnull(dt): return dt
+    return pd.NaT
+
 if uploaded_file is not None:
     # 2. 讀取與初始化資料
     try:
@@ -332,12 +347,11 @@ if uploaded_file is not None:
             with b6_col_metric: st.metric(label=f"💰 預估總營收 (TWD)", value=f"{local_rev:,.0f}", help="顯示當前篩選條件下的預估總營收")
 
             if not df_b6.empty:
-                # [V75.3] 確保將最原始的毛利率帶入分組計算中
                 df_b6_grouped = df_b6.groupby('專案').agg({
                     'Calculated_Total_TWD': 'sum',
                     'Calculated_Gross_Profit': 'sum',
                     'Calculated_Actual_Total_TWD': 'sum',
-                    'Parsed_Margin_Rate': 'max' # 取最高毛利率防呆
+                    'Parsed_Margin_Rate': 'max'
                 }).reset_index()
                 
                 if status_col:
@@ -395,7 +409,6 @@ if uploaded_file is not None:
             def get_smart_color_gp(val): return '#333333' if val < (max_gp * 0.4) else '#FFFFFF'
             df_gp_chart['Inside_Color'] = df_gp_chart['Calculated_Gross_Profit'].apply(get_smart_color_gp)
 
-            # [V75.3] 智慧毛利率判定：如果有營收算平均，如果營收是0則直抓原始毛利率
             df_gp_chart['Avg_Margin'] = np.where(
                 df_gp_chart['Calculated_Total_TWD'] > 0, 
                 (df_gp_chart['Calculated_Gross_Profit'] / df_gp_chart['Calculated_Total_TWD']) * 100, 
