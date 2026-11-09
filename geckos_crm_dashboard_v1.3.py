@@ -5,9 +5,19 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 # =========================================================================
-# ⚙️ 網頁初始化、佈局與 CSS 注入
+# ⚙️ 網頁初始化、系統記憶與 CSS 注入
 # =========================================================================
 st.set_page_config(page_title="Geckos Customer Dashboard", layout="wide")
+
+# [V9.6 終極除錯修復] 於系統啟動時，預先宣告所有會用到的 Session State 變數，徹底根絕 KeyError！
+if "active_view" not in st.session_state:
+    st.session_state.active_view = None
+if "active_target" not in st.session_state:
+    st.session_state.active_target = None
+if "is_focus_mode" not in st.session_state:
+    st.session_state.is_focus_mode = False
+if "saved_view_mode" not in st.session_state:
+    st.session_state.saved_view_mode = "🏢 顯示客戶"
 
 # 注入極致的 CSS：自動換行展開所有 Tabs，消滅隱藏與捲動的痛點！
 st.markdown("""
@@ -51,7 +61,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 Geckos Customer Dashboard (V9.5)")
+st.title("📊 Geckos Customer Dashboard (V9.6)")
 
 # =========================================================================
 # 📂 左側側邊欄：資料上傳與篩選條件
@@ -462,17 +472,9 @@ if uploaded_file is not None:
     # =========================================================================
     # 🧩 區塊 2：動態版面控制器 (全螢幕專注模式 vs 雙欄模式)
     # =========================================================================
-    
-    # [V9.5 核心機制] 建立獨立保險箱，永久記憶使用者的網格視圖選擇
-    if "saved_view_mode" not in st.session_state:
-        st.session_state.saved_view_mode = "🏢 顯示客戶"
-
     def on_view_change():
         """當單選按鈕切換時，將選擇存入永久保險箱"""
         st.session_state.saved_view_mode = st.session_state.radio_view_mode
-
-    if "is_focus_mode" not in st.session_state:
-        st.session_state.is_focus_mode = False
 
     # 情境 A：全螢幕專注模式
     if st.session_state.is_focus_mode:
@@ -495,7 +497,6 @@ if uploaded_file is not None:
         col_grid, col_drill = st.columns([1.2, 1.6])
         
         with col_grid:
-            # [V9.5 核心機制] 單選按鈕讀取永久保險箱的值，並在切換時觸發回呼函數
             view_mode = st.radio(
                 "請選擇網格視圖：", 
                 ["🏢 顯示客戶", "📦 顯示產品"], 
