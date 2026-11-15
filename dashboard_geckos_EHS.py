@@ -52,18 +52,15 @@ def load_data():
 df = load_data()
 
 # 3. 頂部戰情指標 (KPI)
-# 【需求2】僅保留評估設備總數
 st.subheader("📊 廠務進度總覽指標")
 st.metric("評估設備總數", f"{len(df)} 台")
 st.markdown("---")
 
 # 4. 核心功能區
-# 【需求3】取消矩陣，將待施工排程改為卡片呈現
 tab1, tab2, tab3 = st.tabs(["🏢 設備總覽 (Cards)", "📅 待施工排程 (Cards)", "🚀 設備交期路徑圖"])
 
 with tab1:
     st.markdown("##### 🧩 設備維度深度檢視")
-    # 【需求2】UI 呈現改成立體卡片，僅顯示 設備名稱、交期、預計進廠日期、進度說明
     cols_per_row = 3
     for i in range(0, len(df), cols_per_row):
         cols = st.columns(cols_per_row)
@@ -75,27 +72,23 @@ with tab1:
                         # 設備名稱
                         st.markdown(f"<div style='font-size:18px; font-weight:bold; color:#2C3E50; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>📦 {row.get('設備名稱', '未標示')}</div>", unsafe_allow_html=True)
                         
-                        # 交期
+                        # 交期 (無資料則不顯示)
                         lead_time = row.get('交期(天)', '')
-                        try:
-                            if lead_time != "" and not math.isnan(float(lead_time)):
+                        if pd.notnull(lead_time) and str(lead_time).strip() != "":
+                            try:
                                 lead_time_str = f"{int(float(lead_time))} 天"
-                            else:
-                                lead_time_str = "未定"
-                        except:
-                            lead_time_str = str(lead_time)
-                            
-                        st.markdown(f"<div style='font-size:22px; font-weight:900; color:#2980B9; margin-top:10px;'>{lead_time_str} <span style='font-size:12px;color:gray;'>交期</span></div>", unsafe_allow_html=True)
+                            except:
+                                lead_time_str = str(lead_time)
+                            st.markdown(f"<div style='font-size:22px; font-weight:900; color:#2980B9; margin-top:10px;'>{lead_time_str} <span style='font-size:12px;color:gray;'>交期</span></div>", unsafe_allow_html=True)
                         
-                        # 預計進廠日期
+                        # 預計進廠日期 (上距調整讓版面平衡)
                         eta = row.get('預計入廠日期', '未定')
-                        st.markdown(f"<div style='font-size:14px; font-weight:700; color:#16A085; margin-bottom:10px;'>📅 預計進廠：{eta}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='font-size:14px; font-weight:700; color:#16A085; margin-bottom:10px; margin-top:10px;'>📅 預計進廠：{eta}</div>", unsafe_allow_html=True)
                         
-                        # 進度說明
+                        # 進度說明 (無資料則不顯示)
                         progress = row.get('進度說明', '')
-                        progress_str = progress if str(progress).strip() != "" else "無特殊說明"
-                        
-                        st.info(f"**📝 進度說明**：\n{progress_str}")
+                        if pd.notnull(progress) and str(progress).strip() != "":
+                            st.info(f"**📝 進度說明**：\n{str(progress).strip()}")
 
 with tab2:
     st.markdown("##### 尚未完成一次側施工之設備")
@@ -103,7 +96,6 @@ with tab2:
     if pending_df.empty:
         st.success("🎉 目前所有列管設備皆已完成一次側施工！")
     else:
-        # 【需求3】待施工排程清單也做卡片呈現，並把「進度說明」拿掉
         cols_per_row_2 = 3
         for i in range(0, len(pending_df), cols_per_row_2):
             cols = st.columns(cols_per_row_2)
@@ -129,8 +121,7 @@ with tab2:
                             st.markdown(f"<div style='font-size:14px; color:#555;'>📅 預計進廠：<b>{eta}</b></div>", unsafe_allow_html=True)
                             
                             hookup = row.get('預計一次測施工', '未排定')
-                            st.error(f"🔧 預計施工日：**{hookup}**") # 用紅色 error 框凸顯待施工日期
-                            # (此處不顯示進度說明)
+                            st.error(f"🔧 預計施工日：**{hookup}**")
 
 with tab3:
     st.markdown("##### 🚀 設備交期與施工路徑圖 (Equipment Roadmap)")
@@ -150,7 +141,6 @@ with tab3:
         eq_name = str(row['設備名稱'])
         lead_time = row.get('交期(天)', '')
         
-        # 【需求4】若有交期天數，則在設備名稱下方附加標註
         try:
             if lead_time != "" and not math.isnan(float(lead_time)):
                 display_name = f"{eq_name}<br><span style='font-size:11px;color:gray;'>(設備交期天數: {int(float(lead_time))}天)</span>"
@@ -167,7 +157,7 @@ with tab3:
         if dates:
             sorted_points = sorted(dates.items(), key=lambda x: x[1])
             x_vals = [p[1] for p in sorted_points]
-            y_vals = [display_name] * len(x_vals) # 使用新的帶有交期天數的名稱
+            y_vals = [display_name] * len(x_vals)
             
             fig.add_trace(go.Scatter(
                 x=x_vals, y=y_vals, 
@@ -190,7 +180,7 @@ with tab3:
                 t_pos = "top center" if node_name == '施工' else "bottom center"
                 
                 fig.add_trace(go.Scatter(
-                    x=[dt], y=[display_name], # 對應 Y 軸名稱
+                    x=[dt], y=[display_name], 
                     mode='markers+text',
                     marker=dict(color=conf['color'], symbol=conf['symbol'], size=conf['size'], line=dict(width=2, color='white')),
                     text=[dt.strftime('%m/%d')],
@@ -200,7 +190,6 @@ with tab3:
                     showlegend=False
                 ))
 
-    # 圖例
     legend_items = [
         {'name': '評估會議', 'color': '#2E86C1', 'symbol': 'circle', 'size': 10},
         {'name': '一次側施工', 'color': '#F39C12', 'symbol': 'diamond', 'size': 10},
@@ -213,7 +202,6 @@ with tab3:
             name=item['name'], showlegend=True
         ))
 
-    # 垂直標示線
     fig.add_vline(x=now, line_width=2, line_dash="dash", line_color="#E74C3C")
     fig.add_annotation(
         x=now, y=1.05, yref='paper', text=f"📍 本日 ({now.strftime('%Y-%m-%d')})", 
@@ -227,11 +215,10 @@ with tab3:
             showarrow=False, font=dict(color="#1E8449", weight="bold"), bgcolor="rgba(255,255,255,0.8)"
         )
 
-    # 調整圖表高度（因為 Y 軸文字變兩行，稍微增加行距高度）
     fig.update_layout(
         xaxis=dict(title="時間軸 (日期)", type='date', tickformat="%Y-%m-%d"),
         yaxis=dict(title="設備名稱", autorange="reversed"), 
-        height=max(400, 150 + (len(df_roadmap) * 60)), # 將每一行的高度從50拉到60以容納兩行字
+        height=max(400, 150 + (len(df_roadmap) * 60)),
         margin=dict(l=0, r=0, t=60, b=20),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
     )
