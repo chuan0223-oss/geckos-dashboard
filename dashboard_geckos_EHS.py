@@ -121,12 +121,16 @@ with tab3:
                 days_diff = (dt - now).days
                 status_text = f"剩 {days_diff} 天" if days_diff >= 0 else f"已過 {abs(days_diff)} 天"
                 
+                # 解決字體重疊：動態分配文字位置
+                # 施工日期顯示在線上 (top center)，評估與入廠顯示在線下 (bottom center)
+                t_pos = "top center" if node_name == '施工' else "bottom center"
+                
                 fig.add_trace(go.Scatter(
                     x=[dt], y=[eq_name],
                     mode='markers+text',
                     marker=dict(color=conf['color'], symbol=conf['symbol'], size=conf['size'], line=dict(width=2, color='white')),
                     text=[dt.strftime('%m/%d')],
-                    textposition="bottom center",
+                    textposition=t_pos,
                     hovertext=f"<b>{eq_name}</b><br>{node_name}: {dt.strftime('%Y-%m-%d')}<br>({status_text})",
                     hoverinfo="text",
                     showlegend=False
