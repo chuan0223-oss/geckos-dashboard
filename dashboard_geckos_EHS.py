@@ -94,8 +94,10 @@ with tab1:
                         # 進度說明
                         progress = row.get('進度說明', '')
                         progress_str = progress if str(progress).strip() != "" else "無特殊說明"
-                        st.info(f"**📝 進度說明**：
-{progress_str}")
+                        
+                        # 修復 SyntaxError: 使用 
+ 來換行，而不是直接斷行
+                        st.info(f"**📝 進度說明**：\n{progress_str}")
 
 with tab2:
     st.markdown("##### 尚未完成一次側施工之設備")
