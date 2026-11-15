@@ -81,6 +81,9 @@ with tab3:
     # 過濾出至少有入廠日期的設備
     df_roadmap = df_roadmap.dropna(subset=['入廠_dt']).sort_values('入廠_dt', ascending=False)
     now = pd.Timestamp.now().normalize()
+    
+    # 找出所有設備中最晚的入廠日期
+    max_move_in_date = df_roadmap['入廠_dt'].max()
 
     fig = go.Figure()
 
@@ -155,8 +158,16 @@ with tab3:
         x=now, y=1.05, yref='paper', text=f"📍 本日 ({now.strftime('%Y-%m-%d')})", 
         showarrow=False, font=dict(color="#E74C3C", weight="bold"), bgcolor="rgba(255,255,255,0.8)"
     )
+    
+    # 5. 畫上「NCP系列產線設備完成日」的垂直虛線 (最晚設備入廠日)
+    if pd.notnull(max_move_in_date):
+        fig.add_vline(x=max_move_in_date, line_width=2, line_dash="dash", line_color="#1E8449") # 深綠色
+        fig.add_annotation(
+            x=max_move_in_date, y=1.05, yref='paper', text=f"🏁 NCP系列產線設備完成日 ({max_move_in_date.strftime('%Y-%m-%d')})", 
+            showarrow=False, font=dict(color="#1E8449", weight="bold"), bgcolor="rgba(255,255,255,0.8)"
+        )
 
-    # 5. 排版與顯示
+    # 6. 排版與顯示
     fig.update_layout(
         xaxis=dict(title="時間軸 (日期)", type='date', tickformat="%Y-%m-%d"),
         yaxis=dict(title="設備名稱", autorange="reversed"), # 反轉Y軸讓第一筆在最上面
